@@ -1,9 +1,10 @@
 import numpy as np
 
-def _get_member(community, n_members, clockwise=True, train=True):
+def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
 
     if train:
-        random_member = community*n_members + np.random.choice(2)
+        choose = int(np.round(n_members*train_percent))
+        random_member = community*n_members + np.random.choice(choose)
     else:
         random_member = community*n_members + np.random.choice(n_members)
         
@@ -11,13 +12,13 @@ def _get_member(community, n_members, clockwise=True, train=True):
 
     counter = 0
     next_token = random_member
-    while counter < n_members:
+    while counter < n_members-1:
 
         if clockwise:
             next_token += 1
         else:
             next_token -= 1
-           
+  
         if next_token < community*n_members:
             next_token = (community+1)*n_members-1
         elif next_token == (community+1)*n_members:
