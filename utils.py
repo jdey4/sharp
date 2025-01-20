@@ -6,7 +6,8 @@ def _get_member(community, n_members, clockwise=True, train=True, train_percent=
         choose = int(np.round(n_members*train_percent))
         random_member = community*n_members + np.random.choice(choose)
     else:
-        random_member = community*n_members + np.random.choice(n_members)
+        choose = int(np.round(n_members*train_percent))
+        random_member = community*n_members + choose + np.random.choice(n_members-choose)
         
     seq = chr(ord('A')+random_member)
 
