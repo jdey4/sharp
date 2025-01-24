@@ -3,7 +3,7 @@ import numpy as np
 def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
 
     if train:
-        choose = int(np.round(n_members*train_percent))
+        choose = n_members#int(np.round(n_members*train_percent))
         random_member = community*n_members + np.random.choice(choose)
     else:
         choose = int(np.round(n_members*train_percent))
