@@ -30,7 +30,7 @@ def _get_member(community, n_members, clockwise=True, train=True, train_percent=
     
     return seq 
 
-def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.66, random_state=0):
+def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.66, random_state=0, return_direction=False):
     
     """
     Generate data sequence divided into communities.
@@ -82,5 +82,8 @@ def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.
     for ii, community in enumerate(visits):
         out += _get_member(community, n_members, clockwise=direction[ii], train=train, train_percent=train_percent) + chr(ord('A')+n_community*n_members)
 
+    if return_direction:
+        return out[:n_samples], direction
+    
     return out[:n_samples]
         
