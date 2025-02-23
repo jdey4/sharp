@@ -255,19 +255,22 @@ def main():
         # threshold = np.quantile(dis_array, .8)
         # peaks = find_peaks(dis_array, .7)[0]
         peaks = [-100] 
-        threshold = 0.2
-        prev_dis = 1
+        threshold = 0.4
+        # prev_dis = 1
 
         for ii, dis in enumerate(dis_array):
-            if prev_dis - dis >= threshold and peaks[-1]!=ii-2:
-                peaks.append(ii-1)
+            if dis >= threshold:
+                if peaks[-1] == ii-1:
+                    peaks.pop(-1)
+
+                peaks.append(ii)
             
-            prev_dis = dis 
+            # prev_dis = dis 
 
         peaks.pop(0)
         mask = np.zeros(dis_array.shape, dtype=int)
         mask[peaks] = 1
-
+        # mask = ((dis_array>threshold)*1)
         print(mask[-100:])
         #%%
         data_set = Dataset_converter_compressor(data_compressor, mask)
