@@ -168,9 +168,9 @@ def main():
         working_memory = 1
         short_term_memory = args.bptt
         hidden_wake_size = args.node
-        hidden_compressor_size = 5
+        hidden_compressor_size = 10
         hidden_sleep_size = args.node
-        sleep_output_size = 10
+        sleep_output_size = 20
         num_layers_wake = 1
         num_layers_sleep = 1
         # output_sleep = len(tokens)
