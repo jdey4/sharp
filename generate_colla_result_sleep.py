@@ -160,7 +160,7 @@ def main():
 
     args = parser.parse_args()
 
-    reps = 5
+    reps = 10
     result = []
     for rep in range(reps):
         ### initial training ###
@@ -309,12 +309,6 @@ def main():
                     correct[total%1000] = 1
                 else:
                     correct[total%1000] = 0
-
-                test_acc.append(
-                    np.sum(correct)/total if total<1000 else np.sum(correct)/1000
-                )
-                if total%1000 == 0:
-                    print(f'Iter : {total+1}, loss: {loss:.4f}, accuracy: {test_acc[-1]:.4f}')
 
 
         #%%
