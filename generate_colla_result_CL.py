@@ -329,10 +329,10 @@ def main():
                     compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
                     
                 total += 1
-                if true_y == estimated_y:
-                    correct[total%1000] = 1
-                else:
-                    correct[total%1000] = 0
+                # if true_y == estimated_y:
+                #     correct[total%1000] = 1
+                # else:
+                #     correct[total%1000] = 0
 
 
         #%%
@@ -352,8 +352,8 @@ def main():
 
         total = 0
         hidden_s = None
-        correct_task1 = np.zeros(1000,dtype=float)
-        correct_task2 = np.zeros(1000,dtype=float)
+        # correct_task1 = np.zeros(1000,dtype=float)
+        # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(sleep_loader_task1, sleep_loader_task2):
 
             with torch.no_grad():
@@ -424,10 +424,10 @@ def main():
 
 
                 test_acc_task1.append(
-                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
+                    np.sum(correct_task1)/1000
                 )
                 test_acc_task2.append(
-                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                    np.sum(correct_task2)/1000
                 )
 
                 if total%1000 == 0:
@@ -452,8 +452,8 @@ def main():
 
         total = 0
         hidden_s = None
-        correct_task1 = np.zeros(1000,dtype=float)
-        correct_task2 = np.zeros(1000,dtype=float)
+        # correct_task1 = np.zeros(1000,dtype=float)
+        # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(train_loader_task2, train_loader_task1):
 
             with torch.no_grad():
@@ -524,10 +524,10 @@ def main():
 
 
                 test_acc_task1.append(
-                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
+                    np.sum(correct_task1)/1000
                 )
                 test_acc_task2.append(
-                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                    np.sum(correct_task2)/1000
                 )
 
                 if total%1000 == 0:
@@ -645,8 +645,8 @@ def main():
 
         total = 0
         hidden_s = None
-        correct_task1 = np.zeros(1000,dtype=float)
-        correct_task2 = np.zeros(1000,dtype=float)
+        # correct_task1 = np.zeros(1000,dtype=float)
+        # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(sleep_loader_task2, sleep_loader_task1):
 
             with torch.no_grad():
@@ -717,10 +717,10 @@ def main():
 
 
                 test_acc_task1.append(
-                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
+                    np.sum(correct_task1)/1000
                 )
                 test_acc_task2.append(
-                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                    np.sum(correct_task2)/1000
                 )
 
                 if total%1000 == 0:
