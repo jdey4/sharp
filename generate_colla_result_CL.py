@@ -279,7 +279,7 @@ def main():
         # threshold = np.quantile(dis_array, .8)
         # peaks = find_peaks(dis_array, .7)[0]
         peaks = [-100] 
-        threshold = 0.4
+        threshold = 0.3
         # prev_dis = 1
 
         for ii, dis in enumerate(dis_array):
@@ -498,95 +498,95 @@ def main():
                     print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
 
         #%%
-        compressor_sample = 20000
+        # compressor_sample = 20000
 
-        data_compressor = get_sequence(compressor_sample, n_community, n_members, train=False)
+        # data_compressor = get_sequence(compressor_sample, n_community, n_members, train=False)
 
-        data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
-        compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
+        # data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
+        # compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
 
-        ii = 0
-        dis = [0]
-        # community = ''
+        # ii = 0
+        # dis = [0]
+        # # community = ''
 
-        with torch.no_grad():
-            for X, _ in compressor_loader:
-                if ii==0:
-                    id, hw = network1(X)
-                    id_current = hw
-                    # community = tokens[torch.argmax(X[0])]
-                else:
-                    id, hw = network1(X, hw=hw)
-                    id_current = hw
-                    if ii>=1:
-                        dis.append(compute_geodesic(prev_id, id_current))
-                        # print(dis)
-                        # if dis[-1] >0.407:
-                        #     # print(dis, tokens[torch.argmax(X[0])])
-                        #     community += tokens[torch.argmax(X[0])]
+        # with torch.no_grad():
+        #     for X, _ in compressor_loader:
+        #         if ii==0:
+        #             id, hw = network1(X)
+        #             id_current = hw
+        #             # community = tokens[torch.argmax(X[0])]
+        #         else:
+        #             id, hw = network1(X, hw=hw)
+        #             id_current = hw
+        #             if ii>=1:
+        #                 dis.append(compute_geodesic(prev_id, id_current))
+        #                 # print(dis)
+        #                 # if dis[-1] >0.407:
+        #                 #     # print(dis, tokens[torch.argmax(X[0])])
+        #                 #     community += tokens[torch.argmax(X[0])]
                             
                     
-                prev_id = id_current
-                ii += 1
-        #%%
-        dis_array = np.array(dis)
-        # threshold = np.quantile(dis_array, .8)
-        # peaks = find_peaks(dis_array, .7)[0]
-        peaks = [-100] 
-        threshold = 0.4
-        # prev_dis = 1
+        #         prev_id = id_current
+        #         ii += 1
+        # #%%
+        # dis_array = np.array(dis)
+        # # threshold = np.quantile(dis_array, .8)
+        # # peaks = find_peaks(dis_array, .7)[0]
+        # peaks = [-100] 
+        # threshold = 0.3
+        # # prev_dis = 1
 
-        for ii, dis in enumerate(dis_array):
-            if dis >= threshold:
-                if peaks[-1] == ii-1:
-                    peaks.pop(-1)
+        # for ii, dis in enumerate(dis_array):
+        #     if dis >= threshold:
+        #         if peaks[-1] == ii-1:
+        #             peaks.pop(-1)
 
-                peaks.append(ii)
+        #         peaks.append(ii)
             
-            # prev_dis = dis 
+        #     # prev_dis = dis 
 
-        peaks.pop(0)
-        mask = np.zeros(dis_array.shape, dtype=int)
-        mask[peaks] = 1
-        # mask = ((dis_array>threshold)*1)
-        print(mask[-100:])
-        #%%
-        data_set = Dataset_converter_compressor(data_compressor, mask)
-        compressor_loader = DataLoader(data_set, batch_size=1, shuffle=False) 
-        compression = []
+        # peaks.pop(0)
+        # mask = np.zeros(dis_array.shape, dtype=int)
+        # mask[peaks] = 1
+        # # mask = ((dis_array>threshold)*1)
+        # print(mask[-100:])
+        # #%%
+        # data_set = Dataset_converter_compressor(data_compressor, mask)
+        # compressor_loader = DataLoader(data_set, batch_size=1, shuffle=False) 
+        # compression = []
 
-        compressor_model = compressor(input_size, hidden_compressor_size)
-        optimizer = torch.optim.SGD(compressor_model.parameters(), lr=4e-4, momentum=0.95)
-        criterion = torch.nn.CrossEntropyLoss()
+        # compressor_model = compressor(input_size, hidden_compressor_size)
+        # optimizer = torch.optim.SGD(compressor_model.parameters(), lr=4e-4, momentum=0.95)
+        # criterion = torch.nn.CrossEntropyLoss()
 
-        total = 0
-        correct = np.zeros(1000, dtype=float)
-        for X, y in compressor_loader:
-            optimizer.zero_grad()
+        # total = 0
+        # correct = np.zeros(1000, dtype=float)
+        # for X, y in compressor_loader:
+        #     optimizer.zero_grad()
 
-            if total == 0:
-                predicted_y, hidden = compressor_model(X)
-            else:
-                predicted_y, hidden = compressor_model(X, hc=mem)
+        #     if total == 0:
+        #         predicted_y, hidden = compressor_model(X)
+        #     else:
+        #         predicted_y, hidden = compressor_model(X, hc=mem)
                 
-            loss = criterion(predicted_y, y)
-            loss.backward()
-            optimizer.step()
+        #     loss = criterion(predicted_y, y)
+        #     loss.backward()
+        #     optimizer.step()
 
-            with torch.no_grad():
-                mem = hidden.clone()
+        #     with torch.no_grad():
+        #         mem = hidden.clone()
 
-                true_y = y.argmax(axis=1)
-                estimated_y = predicted_y.argmax(axis=1)
+        #         true_y = y.argmax(axis=1)
+        #         estimated_y = predicted_y.argmax(axis=1)
 
-                if estimated_y[0]:
-                    compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
+        #         if estimated_y[0]:
+        #             compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
                     
-                total += 1
-                if true_y == estimated_y:
-                    correct[total%1000] = 1
-                else:
-                    correct[total%1000] = 0
+        #         total += 1
+        #         if true_y == estimated_y:
+        #             correct[total%1000] = 1
+        #         else:
+        #             correct[total%1000] = 0
 
 
         #%%
