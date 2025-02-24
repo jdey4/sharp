@@ -161,7 +161,8 @@ def main():
     args = parser.parse_args()
 
     reps = 10
-    result = []
+    result_task1 = []
+    result_task2 = [] 
     for rep in range(reps):
         ### initial training ###
         total_samples = 40000
@@ -176,12 +177,16 @@ def main():
         # output_sleep = len(tokens)
         input_size = len(tokens)*working_memory
         lr = 4e-4
-        test_acc = []
+        test_acc_task1 = []
+        test_acc_task2 = []
 
-        data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)
+        data_task1 = get_sequence(total_samples, n_community, n_members)
+        data_set_task1 = Dataset_converter(data_task1, working_memory, short_term_memory)
+        train_loader_task1 = DataLoader(data_set_task1, batch_size=1, shuffle=False)
 
-        data_set = Dataset_converter(data, working_memory, short_term_memory)
-        train_loader = DataLoader(data_set, batch_size=1, shuffle=False)
+        data_task2 = get_sequence(total_samples, n_community, n_members, train=False)
+        data_set_task2 = Dataset_converter(data_task2, working_memory, short_term_memory)
+        train_loader_task2 = DataLoader(data_set_task2, batch_size=1, shuffle=False)
 
         network1 = brain(input_size, hidden_wake_size, hidden_sleep_size, sleep_output_size, num_layers_wake, num_layers_sleep)
 
@@ -189,8 +194,9 @@ def main():
         criterion = torch.nn.CrossEntropyLoss()
 
         total = 0
-        correct = np.zeros(1000,dtype=float)
-        for X, y in train_loader:
+        correct_task1 = np.zeros(1000,dtype=float)
+        correct_task2 = np.zeros(1000,dtype=float)
+        for (X, y), (X_, y_) in zip(train_loader_task1, train_loader_task2):
             optimizer.zero_grad()
 
             if total == 0:
@@ -207,22 +213,40 @@ def main():
                 true_y = y.argmax(axis=1)
                 estimated_y = predicted_y.argmax(axis=2)
 
+
+                if total == 0:
+                    predicted_y, mem_ = network1(X_)
+                else:
+                    predicted_y, mem_ = network1(X_, hw=mem_)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y.argmax(axis=2)
+
                 total += 1
                 if true_y == estimated_y:
-                        correct[total%1000] = 1
+                        correct_task1[total%1000] = 1
                 else:
-                    correct[total%1000] = 0
+                    correct_task1[total%1000] = 0
 
-                test_acc.append(
-                    np.sum(correct)/total if total<1000 else np.sum(correct)/1000
+                if true_y_ == estimated_y_:
+                        correct_task2[total%1000] = 1
+                else:
+                    correct_task2[total%1000] = 0
+
+                test_acc_task1.append(
+                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
                 )
+                test_acc_task2.append(
+                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                )
+
                 if total%1000 == 0:
-                    print(f'Iter : {total+1}, loss: {loss:.4f}, accuracy: {test_acc[-1]:.4f}')
+                    print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
 
         #%%
         compressor_sample = 20000
 
-        data_compressor = get_sequence(compressor_sample, n_community, n_members, train=True, train_percent=1.0)
+        data_compressor = get_sequence(compressor_sample, n_community, n_members)
 
         data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
         compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
@@ -312,12 +336,14 @@ def main():
 
 
         #%%
-        sleep_samples = 200000
-        data_sleep = get_sequence(sleep_samples, n_community, n_members, train_percent=1.0)
-        data_set_sleep = Dataset_converter(data_sleep, working_memory, short_term_memory)
+        sleep_samples = 100000
+        data_sleep_task1 = get_sequence(sleep_samples, n_community, n_members)
+        data_set_sleep_task1 = Dataset_converter(data_sleep_task1, working_memory, short_term_memory)
+        sleep_loader_task1 = DataLoader(data_set_sleep_task1, batch_size=1, shuffle=False)
 
-        sleep_loader = DataLoader(data_set_sleep, batch_size=1, shuffle=False)
-
+        data_sleep_task2 = get_sequence(sleep_samples, n_community, n_members, train=False)
+        data_set_sleep_task2 = Dataset_converter(data_sleep_task2, working_memory, short_term_memory)
+        sleep_loader_task2 = DataLoader(data_set_sleep_task2, batch_size=1, shuffle=False)
         # network1.rnn.requires_grad = True
         # network1.wake_fc.requires_grad = True
 
@@ -326,8 +352,9 @@ def main():
 
         total = 0
         hidden_s = None
-        correct = np.zeros(1000,dtype=float)
-        for X, y in sleep_loader:
+        correct_task1 = np.zeros(1000,dtype=float)
+        correct_task2 = np.zeros(1000,dtype=float)
+        for (X, y), (X_, y_) in zip(sleep_loader_task1, sleep_loader_task2):
 
             with torch.no_grad():
                 if total == 0:
@@ -339,21 +366,27 @@ def main():
 
                 selection = predicted_y.argmax(axis=1)
 
-                # if selection:
-                #     sleep = True
-                #     compressed_seq += data_sleep[total]
-                #     X_ = y_.clone()
-                #     y_ = X.clone()
-                #     # print(X_,y_)
-                # else:
-                #     sleep = False
 
                 if selection:        
                     community = prev_community.clone()
                     prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
+                else:
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
             ####################################################################
             optimizer.zero_grad()
-            # print(data_sleep[total])
             if total == 0:
                 predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
             else:
@@ -369,22 +402,297 @@ def main():
                 true_y = y.argmax(axis=1)
                 estimated_y = predicted_y.argmax(axis=2)
 
+                if total == 0:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
+                else:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y_.argmax(axis=2)
+
                 total += 1
                 if true_y == estimated_y:
-                        correct[total%1000] = 1
+                    correct_task1[total%1000] = 1
+                else:
+                    correct_task1[total%1000] = 0
+
+
+                if true_y_ == estimated_y_:
+                    correct_task2[total%1000] = 1
+                else:
+                    correct_task2[total%1000] = 0
+
+
+                test_acc_task1.append(
+                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
+                )
+                test_acc_task2.append(
+                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                )
+
+                if total%1000 == 0:
+                    print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
+
+
+    #################################################################################################################################################################
+
+        data_task1 = get_sequence(total_samples, n_community, n_members)
+        data_set_task1 = Dataset_converter(data_task1, working_memory, short_term_memory)
+        train_loader_task1 = DataLoader(data_set_task1, batch_size=1, shuffle=False)
+
+        data_task2 = get_sequence(total_samples, n_community, n_members, train=False)
+        data_set_task2 = Dataset_converter(data_task2, working_memory, short_term_memory)
+        train_loader_task2 = DataLoader(data_set_task2, batch_size=1, shuffle=False)
+
+        optimizer = torch.optim.SGD(network1.parameters(), lr=lr, momentum=0.95)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        total = 0
+        correct_task1 = np.zeros(1000,dtype=float)
+        correct_task2 = np.zeros(1000,dtype=float)
+        for (X, y), (X_, y_) in zip(train_loader_task2, train_loader_task1):
+            optimizer.zero_grad()
+
+            if total == 0:
+                predicted_y, hidden = network1(X)
+            else:
+                predicted_y, hidden = network1(X, hw=mem)
+                
+            loss = criterion(predicted_y[0], y)
+            loss.backward(retain_graph=True)
+            optimizer.step()
+
+            with torch.no_grad():
+                mem=hidden.clone()
+                true_y = y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
+
+
+                if total == 0:
+                    predicted_y, mem_ = network1(X_)
+                else:
+                    predicted_y, mem_ = network1(X_, hw=mem_)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y.argmax(axis=2)
+
+                total += 1
+                if true_y == estimated_y:
+                        correct_task2[total%1000] = 1
+                else:
+                    correct_task2[total%1000] = 0
+
+                if true_y_ == estimated_y_:
+                        correct_task1[total%1000] = 1
+                else:
+                    correct_task1[total%1000] = 0
+
+                test_acc_task1.append(
+                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
+                )
+                test_acc_task2.append(
+                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                )
+
+                if total%1000 == 0:
+                    print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
+
+        #%%
+        compressor_sample = 20000
+
+        data_compressor = get_sequence(compressor_sample, n_community, n_members, train=False)
+
+        data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
+        compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
+
+        ii = 0
+        dis = [0]
+        # community = ''
+
+        with torch.no_grad():
+            for X, _ in compressor_loader:
+                if ii==0:
+                    id, hw = network1(X)
+                    id_current = hw
+                    # community = tokens[torch.argmax(X[0])]
+                else:
+                    id, hw = network1(X, hw=hw)
+                    id_current = hw
+                    if ii>=1:
+                        dis.append(compute_geodesic(prev_id, id_current))
+                        # print(dis)
+                        # if dis[-1] >0.407:
+                        #     # print(dis, tokens[torch.argmax(X[0])])
+                        #     community += tokens[torch.argmax(X[0])]
+                            
+                    
+                prev_id = id_current
+                ii += 1
+        #%%
+        dis_array = np.array(dis)
+        # threshold = np.quantile(dis_array, .8)
+        # peaks = find_peaks(dis_array, .7)[0]
+        peaks = [-100] 
+        threshold = 0.4
+        # prev_dis = 1
+
+        for ii, dis in enumerate(dis_array):
+            if dis >= threshold:
+                if peaks[-1] == ii-1:
+                    peaks.pop(-1)
+
+                peaks.append(ii)
+            
+            # prev_dis = dis 
+
+        peaks.pop(0)
+        mask = np.zeros(dis_array.shape, dtype=int)
+        mask[peaks] = 1
+        # mask = ((dis_array>threshold)*1)
+        print(mask[-100:])
+        #%%
+        data_set = Dataset_converter_compressor(data_compressor, mask)
+        compressor_loader = DataLoader(data_set, batch_size=1, shuffle=False) 
+        compression = []
+
+        compressor_model = compressor(input_size, hidden_compressor_size)
+        optimizer = torch.optim.SGD(compressor_model.parameters(), lr=4e-4, momentum=0.95)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        total = 0
+        correct = np.zeros(1000, dtype=float)
+        for X, y in compressor_loader:
+            optimizer.zero_grad()
+
+            if total == 0:
+                predicted_y, hidden = compressor_model(X)
+            else:
+                predicted_y, hidden = compressor_model(X, hc=mem)
+                
+            loss = criterion(predicted_y, y)
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                mem = hidden.clone()
+
+                true_y = y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=1)
+
+                if estimated_y[0]:
+                    compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
+                    
+                total += 1
+                if true_y == estimated_y:
+                    correct[total%1000] = 1
                 else:
                     correct[total%1000] = 0
 
-                test_acc.append(
-                    np.sum(correct)/total if total<1000 else np.sum(correct)/1000
+
+        #%%
+        sleep_samples = 100000
+        data_sleep_task1 = get_sequence(sleep_samples, n_community, n_members)
+        data_set_sleep_task1 = Dataset_converter(data_sleep_task1, working_memory, short_term_memory)
+        sleep_loader_task1 = DataLoader(data_set_sleep_task1, batch_size=1, shuffle=False)
+
+        data_sleep_task2 = get_sequence(sleep_samples, n_community, n_members, train=False)
+        data_set_sleep_task2 = Dataset_converter(data_sleep_task2, working_memory, short_term_memory)
+        sleep_loader_task2 = DataLoader(data_set_sleep_task2, batch_size=1, shuffle=False)
+        # network1.rnn.requires_grad = True
+        # network1.wake_fc.requires_grad = True
+
+        optimizer = torch.optim.SGD(network1.parameters(), lr=lr, momentum=0.95)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        total = 0
+        hidden_s = None
+        correct_task1 = np.zeros(1000,dtype=float)
+        correct_task2 = np.zeros(1000,dtype=float)
+        for (X, y), (X_, y_) in zip(sleep_loader_task2, sleep_loader_task1):
+
+            with torch.no_grad():
+                if total == 0:
+                    community = X.clone()
+                    prev_community = X.clone()
+                    predicted_y, hidden = compressor_model(X[0])
+                else:
+                    predicted_y, hidden = compressor_model(X[0], hc=hidden)
+
+                selection = predicted_y.argmax(axis=1)
+
+
+                if selection:        
+                    community = prev_community.clone()
+                    prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
+                else:
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
+            ####################################################################
+            optimizer.zero_grad()
+            if total == 0:
+                predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
+            else:
+                predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
+                
+            loss = criterion(predicted_y[0], y)
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                mem=hidden_w.clone()
+                mem_=hidden_s.clone()
+                true_y = y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
+
+                if total == 0:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
+                else:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y_.argmax(axis=2)
+
+                total += 1
+                if true_y == estimated_y:
+                    correct_task2[total%1000] = 1
+                else:
+                    correct_task2[total%1000] = 0
+
+
+                if true_y_ == estimated_y_:
+                    correct_task1[total%1000] = 1
+                else:
+                    correct_task1[total%1000] = 0
+
+
+                test_acc_task1.append(
+                    np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
                 )
+                test_acc_task2.append(
+                    np.sum(correct_task2)/total if total<1000 else np.sum(correct_task2)/1000
+                )
+
                 if total%1000 == 0:
-                    print(f'Iter : {total+1}, loss: {loss:.4f}, accuracy: {test_acc[-1]:.4f}')
+                    print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
 
-        result.append(test_acc)
-
-    with open('pickle_files/chunking_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
-        pickle.dump(result, f)
+        result_task1.append(test_acc_task1)
+        result_task2.append(test_acc_task2)
+    
+    summary = (result_task1, result_task2)
+    with open('pickle_files/chunking_CL_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
+        pickle.dump(summary, f)
 
 
 if __name__ == "__main__":
