@@ -435,7 +435,10 @@ def main():
 
 
     #################################################################################################################################################################
+        network1.sleep_rnn.requires_grad_ = False 
+        network1.sleep_fc.requires_grad_ = False 
 
+        total_samples = 40000
         data_task1 = get_sequence(total_samples, n_community, n_members)
         data_set_task1 = Dataset_converter(data_task1, working_memory, short_term_memory)
         train_loader_task1 = DataLoader(data_set_task1, batch_size=1, shuffle=False)
@@ -448,44 +451,77 @@ def main():
         criterion = torch.nn.CrossEntropyLoss()
 
         total = 0
+        hidden_s = None
         correct_task1 = np.zeros(1000,dtype=float)
         correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(train_loader_task2, train_loader_task1):
-            optimizer.zero_grad()
 
+            with torch.no_grad():
+                if total == 0:
+                    community = X.clone()
+                    prev_community = X.clone()
+                    predicted_y, hidden = compressor_model(X[0])
+                else:
+                    predicted_y, hidden = compressor_model(X[0], hc=hidden)
+
+                selection = predicted_y.argmax(axis=1)
+
+
+                if selection:        
+                    community = prev_community.clone()
+                    prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
+                else:
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
+            ####################################################################
+            optimizer.zero_grad()
             if total == 0:
-                predicted_y, hidden = network1(X)
+                predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
             else:
-                predicted_y, hidden = network1(X, hw=mem)
+                predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
                 
             loss = criterion(predicted_y[0], y)
-            loss.backward(retain_graph=True)
+            loss.backward()
             optimizer.step()
 
             with torch.no_grad():
-                mem=hidden.clone()
+                mem=hidden_w.clone()
+                mem_=hidden_s.clone()
                 true_y = y.argmax(axis=1)
                 estimated_y = predicted_y.argmax(axis=2)
 
-
                 if total == 0:
-                    predicted_y, mem_ = network1(X_)
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
                 else:
-                    predicted_y, mem_ = network1(X_, hw=mem_)
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
 
                 true_y_ = y_.argmax(axis=1)
-                estimated_y_ = predicted_y.argmax(axis=2)
+                estimated_y_ = predicted_y_.argmax(axis=2)
 
                 total += 1
                 if true_y == estimated_y:
-                        correct_task2[total%1000] = 1
+                    correct_task2[total%1000] = 1
                 else:
                     correct_task2[total%1000] = 0
 
+
                 if true_y_ == estimated_y_:
-                        correct_task1[total%1000] = 1
+                    correct_task1[total%1000] = 1
                 else:
                     correct_task1[total%1000] = 0
+
 
                 test_acc_task1.append(
                     np.sum(correct_task1)/total if total<1000 else np.sum(correct_task1)/1000
@@ -528,7 +564,7 @@ def main():
                     
         #         prev_id = id_current
         #         ii += 1
-        # #%%
+        # #%% editing here
         # dis_array = np.array(dis)
         # # threshold = np.quantile(dis_array, .8)
         # # peaks = find_peaks(dis_array, .7)[0]
@@ -583,13 +619,16 @@ def main():
         #             compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
                     
         #         total += 1
-        #         if true_y == estimated_y:
-        #             correct[total%1000] = 1
-        #         else:
-        #             correct[total%1000] = 0
+        #         # if true_y == estimated_y:
+        #         #     correct[total%1000] = 1
+        #         # else:
+        #         #     correct[total%1000] = 0
 
 
         #%%
+        network1.sleep_rnn.requires_grad_ = True
+        network1.sleep_fc.requires_grad_ = True
+
         sleep_samples = 100000
         data_sleep_task1 = get_sequence(sleep_samples, n_community, n_members)
         data_set_sleep_task1 = Dataset_converter(data_sleep_task1, working_memory, short_term_memory)
