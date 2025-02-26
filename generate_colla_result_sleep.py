@@ -52,7 +52,11 @@ class brain(nn.Module):
             else:
                 out, hs = self.sleep_rnn(x_, hs)
             # print(out.shape)
-            sleep_out = self.sleep_fc(out)
+            sleep_out_ = self.sleep_fc(out)
+            sleep_out = torch.zeros((1,x.shape[1],self.sleep_output_size))
+
+            for ll in range(x.shape[1]):
+                sleep_out[0,ll,:] = sleep_out_
         else:
             sleep_out = torch.zeros((1,x.shape[1],self.sleep_output_size))
  
@@ -198,14 +202,14 @@ def main():
             else:
                 predicted_y, hidden = network1(X, hw=mem)
                 
-            loss = criterion(predicted_y[0], y)
+            loss = criterion(predicted_y, y)
             loss.backward(retain_graph=True)
             optimizer.step()
 
             with torch.no_grad():
                 mem=hidden.clone()
                 true_y = y.argmax(axis=1)
-                estimated_y = predicted_y.argmax(axis=2)
+                estimated_y = predicted_y.argmax(axis=1)
 
                 total += 1
                 if true_y == estimated_y:
@@ -359,7 +363,7 @@ def main():
             else:
                 predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
                 
-            loss = criterion(predicted_y[0], y)
+            loss = criterion(predicted_y, y)
             loss.backward()
             optimizer.step()
 
@@ -367,7 +371,7 @@ def main():
                 mem=hidden_w.clone()
                 mem_=hidden_s.clone()
                 true_y = y.argmax(axis=1)
-                estimated_y = predicted_y.argmax(axis=2)
+                estimated_y = predicted_y.argmax(axis=1)
 
                 total += 1
                 if true_y == estimated_y:
@@ -383,8 +387,8 @@ def main():
 
         result.append(test_acc)
 
-    with open('pickle_files/chunking_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
-        pickle.dump(result, f)
+    # with open('pickle_files/chunking_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
+    #     pickle.dump(result, f)
 
 
 if __name__ == "__main__":
@@ -398,10 +402,10 @@ result = []
 ### initial training ###
 total_samples = 40000
 working_memory = 1
-short_term_memory = 2
-hidden_wake_size = 10
+short_term_memory = 1
+hidden_wake_size = 30
 hidden_compressor_size = 10
-hidden_sleep_size = 10
+hidden_sleep_size = 30
 sleep_output_size = 20
 num_layers_wake = 1
 num_layers_sleep = 1
@@ -565,9 +569,9 @@ for X, y in sleep_loader:
 
     with torch.no_grad():
         if total == 0:
-            X_ = X[0][-1].clone()
+            X_ = X[0][-1].reshape(1,-1).clone()
             community = X_.clone()
-            prev_community = X.clone()
+            prev_community = X_.clone()
             predicted_y, hidden = compressor_model(X_)
         else:
             predicted_y, hidden = compressor_model(X_, hc=hidden)
@@ -594,7 +598,7 @@ for X, y in sleep_loader:
     else:
         predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
         
-    loss = criterion(predicted_y[0], y)
+    loss = criterion(predicted_y, y)
     loss.backward()
     optimizer.step()
 
@@ -602,7 +606,7 @@ for X, y in sleep_loader:
         mem=hidden_w.clone()
         mem_=hidden_s.clone()
         true_y = y.argmax(axis=1)
-        estimated_y = predicted_y.argmax(axis=2)
+        estimated_y = predicted_y.argmax(axis=1)
 
         total += 1
         if true_y == estimated_y:
