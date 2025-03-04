@@ -1,6 +1,6 @@
 # !/bin/sh
 
-bptts=(1)
+bptts=(1 3 5 7)
 nodes=(5 10 15 20 25 30 35)
 
 for bptt in "${bptts[@]}"; do
