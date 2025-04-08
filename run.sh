@@ -1,11 +1,11 @@
 # !/bin/sh
 
-bptts=(1 3 5 7)
-nodes=(5 10 15 20 25 30 35)
+bptts=(1)
+nodes=(15 30 100 200)
 
 for bptt in "${bptts[@]}"; do
     for node in "${nodes[@]}"; do
         echo "Running script for bptt $bptt node $node"
-        python generate_colla_result_sleep.py --bptt $bptt --node $node
+        python generate_cluster_result_CL.py --bptt $bptt --node $node
     done
 done
