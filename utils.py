@@ -1,4 +1,8 @@
 import numpy as np
+import torch
+import torch.nn.functional as F
+import math
+
 
 def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
 
@@ -55,7 +59,7 @@ def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.
         The generated sequence of tokens.
     """
 
-    if random_state != None:
+    if random_state is not None:
         np.random.seed(random_state)
 
     visits = []
@@ -87,3 +91,25 @@ def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.
     
     return out[:n_samples]
         
+
+def compute_bpc(logits, targets):
+    """
+    Computes Bits Per Character (BPC) from model logits and target indices.
+
+    Args:
+        logits: Tensor of shape (batch_size, seq_len, vocab_size)
+        targets: Tensor of shape (batch_size, seq_len), with target character indices
+
+    Returns:
+        Scalar float: BPC value
+    """
+    # Flatten logits and targets to compute cross-entropy
+    logits = logits.view(-1, logits.size(-1))  # (B*T, V)
+    targets = targets.view(-1)                 # (B*T)
+    
+    # Compute cross-entropy loss in nats
+    loss_nats = F.cross_entropy(logits, targets, reduction='mean')  # average over all positions
+    
+    # Convert from nats to bits
+    bpc = loss_nats.item() / math.log(2)
+    return bpc
