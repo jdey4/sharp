@@ -77,18 +77,18 @@ fontsize=40
 
 past_recalls = [1,2,3,4,5]
 for bptt in bptts:
-    ax[0][0].plot(past_recalls, np.mean(result_random[str(bptt)], axis=0), '-o', label='context length '+ str(bptt), linewidth=4)
+    ax[0][0].plot(past_recalls, np.median(result_random[str(bptt)], axis=0), '-o', label='context length '+ str(bptt), linewidth=4)
     ax[0][0].fill_between(past_recalls, np.quantile(result_random[str(bptt)], [0.25], axis=0)[0], np.quantile(result_random[str(bptt)], [0.75], axis=0)[0], alpha=.3)
-    ax[0][1].plot(past_recalls, np.mean(result[str(bptt)], axis=0), '-o', linewidth=4)
+    ax[0][1].plot(past_recalls, np.median(result[str(bptt)], axis=0), '-o', linewidth=4)
     ax[0][1].fill_between(past_recalls, np.quantile(result[str(bptt)], [0.25], axis=0)[0], np.quantile(result[str(bptt)], [0.75], axis=0)[0], alpha=.3)
-    ax[0][2].plot(past_recalls, np.mean(result_linear[str(bptt)], axis=0), '-o', linewidth=4)
+    ax[0][2].plot(past_recalls, np.median(result_linear[str(bptt)], axis=0), '-o', linewidth=4)
     ax[0][2].fill_between(past_recalls, np.quantile(result_linear[str(bptt)], [0.25], axis=0)[0], np.quantile(result_linear[str(bptt)], [0.75], axis=0)[0], alpha=.3)
     
-    ax[1][0].plot(past_recalls, np.mean(result_random_en[str(bptt)], axis=0), '-o', linewidth=4)
+    ax[1][0].plot(past_recalls, np.median(result_random_en[str(bptt)], axis=0), '-o', linewidth=4)
     ax[1][0].fill_between(past_recalls, np.quantile(result_random_en[str(bptt)], [0.25], axis=0)[0], np.quantile(result_random_en[str(bptt)], [0.75], axis=0)[0], alpha=.3)
-    ax[1][1].plot(past_recalls, np.mean(result_en[str(bptt)], axis=0), '-o', linewidth=4)
+    ax[1][1].plot(past_recalls, np.median(result_en[str(bptt)], axis=0), '-o', linewidth=4)
     ax[1][1].fill_between(past_recalls, np.quantile(result_en[str(bptt)], [0.25], axis=0)[0], np.quantile(result_en[str(bptt)], [0.75], axis=0)[0], alpha=.3)
-    ax[1][2].plot(past_recalls, np.mean(result_linear_en[str(bptt)], axis=0), '-o', linewidth=4)
+    ax[1][2].plot(past_recalls, np.median(result_linear_en[str(bptt)], axis=0), '-o', linewidth=4)
     ax[1][2].fill_between(past_recalls, np.quantile(result_linear_en[str(bptt)], [0.25], axis=0)[0], np.quantile(result_linear_en[str(bptt)], [0.75], axis=0)[0], alpha=.3)
 
 ax[0][0].hlines(1-1/7.0, 1, 5, linestyle='--', color='black', linewidth=2, label='chance')
