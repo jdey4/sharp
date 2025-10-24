@@ -2,7 +2,7 @@
 ## Load my files ##
 import sys
 sys.path.append('..')
-from utils import get_sequence
+from source.utils import get_sequence
 
 ## Load standard files ##
 import torch
@@ -39,8 +39,7 @@ class brain(nn.Module):
         super(brain, self).__init__()
 
         self.rnn = nn.RNN(input_size+sleep_output_size, hidden_wake_size, num_layers, nonlinearity='relu', batch_first=True)
-        # self.connect_sleep = nn.Linear(hidden_wake_size, 3)
-        self.sleep_rnn = nn.RNN(hidden_wake_size, hidden_sleep_size, num_layers_sleep, nonlinearity='relu', batch_first=True)
+        self.sleep_rnn = nn.RNN(input_size, hidden_sleep_size, num_layers_sleep, nonlinearity='relu', batch_first=True)
         self.sleep_fc = nn.Linear(hidden_sleep_size, sleep_output_size)
         self.wake_fc = nn.Linear(hidden_wake_size, len(tokens))
         self.sleep_output_size = sleep_output_size
@@ -48,19 +47,15 @@ class brain(nn.Module):
     def forward(self, x, x_=None, hw=None, hs=None, sleep=False):
         # print(x.shape, 'x')
         if sleep:
-            # x_ = self.connect_sleep(x_)
-            
             if hs == None:
                 out, hs = self.sleep_rnn(x_)
             else:
                 out, hs = self.sleep_rnn(x_, hs)
             # print(out.shape)
             sleep_out = self.sleep_fc(out)
-            # print(sleep_out.size(), x.size())
         else:
-            sleep_out = torch.zeros((1,x.size(1),self.sleep_output_size))
+            sleep_out = torch.zeros((1,1,self.sleep_output_size))
             
-        # print(x.size())
         x = torch.cat((x,sleep_out), dim=2)
         
         if hw == None:
@@ -68,7 +63,7 @@ class brain(nn.Module):
         else:
             out, hw = self.rnn(x, hw)
 
-        out = self.wake_fc(out[:,-1,:])
+        out = self.wake_fc(out)
 
         if sleep:
             return out, hw, hs
@@ -174,6 +169,7 @@ def main():
         working_memory = 1
         short_term_memory = args.bptt
         hidden_wake_size = args.node
+        hidden_compressor_size = 10
         hidden_sleep_size = args.node
         sleep_output_size = 20
         num_layers_wake = 1
@@ -208,14 +204,14 @@ def main():
             else:
                 predicted_y, hidden = network1(X, hw=mem)
                 
-            loss = criterion(predicted_y, y)
+            loss = criterion(predicted_y[0], y)
             loss.backward(retain_graph=True)
             optimizer.step()
 
             with torch.no_grad():
                 mem=hidden.clone()
                 true_y = y.argmax(axis=1)
-                estimated_y = predicted_y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
 
 
                 if total == 0:
@@ -224,7 +220,7 @@ def main():
                     predicted_y, mem_ = network1(X_, hw=mem_)
 
                 true_y_ = y_.argmax(axis=1)
-                estimated_y_ = predicted_y.argmax(axis=1)
+                estimated_y_ = predicted_y.argmax(axis=2)
 
                 total += 1
                 if true_y == estimated_y:
@@ -248,46 +244,96 @@ def main():
                     print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
 
         #%%
-        centroids = []
+        compressor_sample = 20000
 
-        threshold = .65
-        n_samples = 10000
-        idx = torch.randint(0, len(tokens), (1,)) [0]
-        X_hat = torch.zeros(len(tokens),dtype=torch.float32)
-        X_hat[idx] = 1.0
+        data_compressor = get_sequence(compressor_sample, n_community, n_members)
+
+        data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
+        compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
+
+        ii = 0
+        dis = [0]
+        # community = ''
 
         with torch.no_grad():
-            for ii in range(n_samples):
-                if ii == 0:
-                    # seq += tokens[idx]        
-                    X_hat, mem = network1(X_hat.reshape(1,1,-1))
-                    centroids.append(mem)
+            for X, _ in compressor_loader:
+                if ii==0:
+                    id, hw = network1(X)
+                    id_current = hw
+                    # community = tokens[torch.argmax(X[0])]
                 else:
-                    X_hat, mem = network1(X_hat, mem)
+                    id, hw = network1(X, hw=hw)
+                    id_current = hw
+                    if ii>=1:
+                        dis.append(compute_geodesic(prev_id, id_current))
+                        # print(dis)
+                        # if dis[-1] >0.407:
+                        #     # print(dis, tokens[torch.argmax(X[0])])
+                        #     community += tokens[torch.argmax(X[0])]
+                            
+                    
+                prev_id = id_current
+                ii += 1
+        #%%
+        dis_array = np.array(dis)
+        # threshold = np.quantile(dis_array, .8)
+        # peaks = find_peaks(dis_array, .7)[0]
+        peaks = [-100] 
+        threshold = 0.3
+        # prev_dis = 1
 
-                dis = []
-                min_dis = 10
-                min_dis_id = -1
-                for jj in range(len(centroids)):
-                    dis.append(
-                        compute_geodesic(centroids[jj].detach().numpy(), mem.detach().numpy())
-                    )
-                    if min_dis >= dis[-1]:
-                        min_dis = dis[-1] 
-                        min_dis_id = jj 
-                if min_dis < threshold:
-                    centroids[min_dis_id] = (centroids[min_dis_id] + mem)/2.0
-                else:
-                    centroids.append(mem)
+        for ii, dis in enumerate(dis_array):
+            if dis >= threshold:
+                if peaks[-1] == ii-1:
+                    peaks.pop(-1)
 
-                # print(min_dis)   
-                X_hat = torch.nn.functional.softmax(X_hat, dim=1)
-                dist_categ = torch.distributions.Categorical(probs=X_hat.reshape(-1))
-                idx = dist_categ.sample()
+                peaks.append(ii)
+            
+            # prev_dis = dis 
 
-                X_hat = torch.zeros(len(tokens),dtype=torch.float32)
-                X_hat[idx] = 1.0
-                X_hat = X_hat.reshape(1,1,-1) 
+        peaks.pop(0)
+        mask = np.zeros(dis_array.shape, dtype=int)
+        mask[peaks] = 1
+        # mask = ((dis_array>threshold)*1)
+        print(mask[-100:])
+        #%%
+        data_set = Dataset_converter_compressor(data_compressor, mask)
+        compressor_loader = DataLoader(data_set, batch_size=1, shuffle=False) 
+        compression = []
+
+        compressor_model = compressor(input_size, hidden_compressor_size)
+        optimizer = torch.optim.SGD(compressor_model.parameters(), lr=4e-4, momentum=0.95)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        total = 0
+        correct = np.zeros(1000, dtype=float)
+        for X, y in compressor_loader:
+            optimizer.zero_grad()
+
+            if total == 0:
+                predicted_y, hidden = compressor_model(X)
+            else:
+                predicted_y, hidden = compressor_model(X, hc=mem)
+                
+            loss = criterion(predicted_y, y)
+            loss.backward()
+            optimizer.step()
+
+            with torch.no_grad():
+                mem = hidden.clone()
+
+                true_y = y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=1)
+
+                if estimated_y[0]:
+                    compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
+                    
+                total += 1
+                # if true_y == estimated_y:
+                #     correct[total%1000] = 1
+                # else:
+                #     correct[total%1000] = 0
+
 
         #%%
         sleep_samples = 100000
@@ -306,66 +352,63 @@ def main():
 
         total = 0
         hidden_s = None
-        # correct = np.zeros(1000,dtype=float)
-        communities = [0]
-        current_community = 0
-        community = torch.zeros((1, short_term_memory, centroids[current_community].size(2)))
-        prev_community = torch.zeros((1, short_term_memory, centroids[current_community].size(2)))
-        
+        # correct_task1 = np.zeros(1000,dtype=float)
+        # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(sleep_loader_task1, sleep_loader_task2):
-            ####################################################################
-            optimizer.zero_grad()
-            if total == 0:
-                predicted_y, hidden_w = network1(X)
-            elif total==1:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, sleep=True)
-            else:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, hs=mem_, sleep=True)
-
-            loss = criterion(predicted_y, y)
-            loss.backward(retain_graph=True)
-            optimizer.step()
-
 
             with torch.no_grad():
                 if total == 0:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, sleep=True)
+                    community = X.clone()
+                    prev_community = X.clone()
+                    predicted_y, hidden = compressor_model(X[0])
                 else:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, hw=hidden_w_, hs=hidden_s_, sleep=True)
+                    predicted_y, hidden = compressor_model(X[0], hc=hidden)
 
-                dis = []
-                for center in centroids:
-                    dis.append(
-                        compute_geodesic(center.detach().numpy(), hidden_w.detach().numpy())
-                    )
-                
-                idx = np.argmin(dis)
+                selection = predicted_y.argmax(axis=1)
 
-                if idx != communities[-1]:
-                    communities.append(idx)  
-                    current_community = communities[-1]
-                    prev_community = community.clone()
+
+                if selection:        
+                    community = prev_community.clone()
+                    prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
                 else:
-                    community[0][0:short_term_memory-1] = community[0][1:short_term_memory].clone()
-                    community[0][-1] = centroids[current_community].view(1,1,-1)[0].clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
+            ####################################################################
+            optimizer.zero_grad()
+            if total == 0:
+                predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
+            else:
+                predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
                 
-                mem=hidden_w.detach().clone()
+            loss = criterion(predicted_y[0], y)
+            loss.backward()
+            optimizer.step()
 
-                if total != 0:
-                    mem_=hidden_s.clone()
-
+            with torch.no_grad():
+                mem=hidden_w.clone()
+                mem_=hidden_s.clone()
                 true_y = y.argmax(axis=1)
-                # print(predicted_y)
-                estimated_y = predicted_y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
 
-                total += 1
-                if true_y == estimated_y:
-                        correct_task1[total%1000] = 1
+                if total == 0:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
                 else:
-                    correct_task1[total%1000] = 0
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
 
                 true_y_ = y_.argmax(axis=1)
-                estimated_y_ = predicted_y_.argmax(axis=1)
+                estimated_y_ = predicted_y_.argmax(axis=2)
 
                 total += 1
                 if true_y == estimated_y:
@@ -392,7 +435,6 @@ def main():
 
 
     #################################################################################################################################################################
-        print("switching to Task 2")
         network1.sleep_rnn.requires_grad_ = False 
         network1.sleep_fc.requires_grad_ = False 
 
@@ -410,60 +452,70 @@ def main():
 
         total = 0
         hidden_s = None
+        # correct_task1 = np.zeros(1000,dtype=float)
+        # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(train_loader_task2, train_loader_task1):
-
-            optimizer.zero_grad()
-            if total == 0:
-                predicted_y, hidden_w = network1(X)
-            elif total==1:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, sleep=True)
-            else:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, hs=mem_, sleep=True)
-
-            loss = criterion(predicted_y, y)
-            loss.backward(retain_graph=True)
-            optimizer.step()
-
 
             with torch.no_grad():
                 if total == 0:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, sleep=True)
+                    community = X.clone()
+                    prev_community = X.clone()
+                    predicted_y, hidden = compressor_model(X[0])
                 else:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, hw=hidden_w_, hs=hidden_s_, sleep=True)
+                    predicted_y, hidden = compressor_model(X[0], hc=hidden)
 
-                dis = []
-                for center in centroids:
-                    dis.append(
-                        compute_geodesic(center.detach().numpy(), hidden_w.detach().numpy())
-                    )
-                
-                idx = np.argmin(dis)
+                selection = predicted_y.argmax(axis=1)
 
-                if idx != communities[-1]:
-                    communities.append(idx)  
-                    current_community = communities[-1]
-                    prev_community = community.clone()
+
+                if selection:        
+                    community = prev_community.clone()
+                    prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
                 else:
-                    community[0][0:short_term_memory-1] = community[0][1:short_term_memory].clone()
-                    community[0][-1] = centroids[current_community].view(1,1,-1)[0].clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
+            ####################################################################
+            optimizer.zero_grad()
+            if total == 0:
+                predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
+            else:
+                predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
                 
-                mem=hidden_w.detach().clone()
+            loss = criterion(predicted_y[0], y)
+            loss.backward()
+            optimizer.step()
 
-                if total != 0:
-                    mem_=hidden_s.clone()
-
+            with torch.no_grad():
+                mem=hidden_w.clone()
+                mem_=hidden_s.clone()
                 true_y = y.argmax(axis=1)
-                # print(predicted_y)
-                estimated_y = predicted_y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
+
+                if total == 0:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
+                else:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y_.argmax(axis=2)
 
                 total += 1
                 if true_y == estimated_y:
-                        correct_task2[total%1000] = 1
+                    correct_task2[total%1000] = 1
                 else:
                     correct_task2[total%1000] = 0
 
-                true_y_ = y_.argmax(axis=1)
-                estimated_y_ = predicted_y_.argmax(axis=1)
 
                 if true_y_ == estimated_y_:
                     correct_task1[total%1000] = 1
@@ -482,63 +534,96 @@ def main():
                     print(f'Iter : {total+1}, loss: {loss:.4f}, task1 accuracy: {test_acc_task1[-1]:.4f}, task2 accuracy: {test_acc_task2[-1]:.4f}')
 
         #%%
-        threshold = .65
-        n_samples = 10000
-        idx = torch.randint(0, len(tokens), (1,)) [0]
-        X_hat = torch.zeros(len(tokens),dtype=torch.float32)
-        X_hat[idx] = 1.0
+        # compressor_sample = 20000
 
-        with torch.no_grad():
-            for ii in range(n_samples):
-                if ii == 0:
-                    X_hat, mem = network1(X_hat.reshape(1,1,-1))
-                    centroids.append(mem)
-                elif ii == 1:
-                    X_hat, mem, hidden_s = network1(X_hat, prev_community, hw=mem, sleep=True)
-                else:
-                    X_hat, mem, hidden_s = network1(X_hat, prev_community, hw=mem, hs=hidden_s, sleep=True)
+        # data_compressor = get_sequence(compressor_sample, n_community, n_members, train=False)
 
-                dis = []
-                for center in centroids:
-                    dis.append(
-                        compute_geodesic(center.detach().numpy(), hidden_w.detach().numpy())
-                    )
+        # data_set_compressor = Dataset_converter(data_compressor, working_memory, short_term_memory)
+        # compressor_loader = DataLoader(data_set_compressor, batch_size=1, shuffle=False) 
+
+        # ii = 0
+        # dis = [0]
+        # # community = ''
+
+        # with torch.no_grad():
+        #     for X, _ in compressor_loader:
+        #         if ii==0:
+        #             id, hw = network1(X)
+        #             id_current = hw
+        #             # community = tokens[torch.argmax(X[0])]
+        #         else:
+        #             id, hw = network1(X, hw=hw)
+        #             id_current = hw
+        #             if ii>=1:
+        #                 dis.append(compute_geodesic(prev_id, id_current))
+        #                 # print(dis)
+        #                 # if dis[-1] >0.407:
+        #                 #     # print(dis, tokens[torch.argmax(X[0])])
+        #                 #     community += tokens[torch.argmax(X[0])]
+                            
+                    
+        #         prev_id = id_current
+        #         ii += 1
+        # #%% editing here
+        # dis_array = np.array(dis)
+        # # threshold = np.quantile(dis_array, .8)
+        # # peaks = find_peaks(dis_array, .7)[0]
+        # peaks = [-100] 
+        # threshold = 0.3
+        # # prev_dis = 1
+
+        # for ii, dis in enumerate(dis_array):
+        #     if dis >= threshold:
+        #         if peaks[-1] == ii-1:
+        #             peaks.pop(-1)
+
+        #         peaks.append(ii)
+            
+        #     # prev_dis = dis 
+
+        # peaks.pop(0)
+        # mask = np.zeros(dis_array.shape, dtype=int)
+        # mask[peaks] = 1
+        # # mask = ((dis_array>threshold)*1)
+        # print(mask[-100:])
+        # #%%
+        # data_set = Dataset_converter_compressor(data_compressor, mask)
+        # compressor_loader = DataLoader(data_set, batch_size=1, shuffle=False) 
+        # compression = []
+
+        # compressor_model = compressor(input_size, hidden_compressor_size)
+        # optimizer = torch.optim.SGD(compressor_model.parameters(), lr=4e-4, momentum=0.95)
+        # criterion = torch.nn.CrossEntropyLoss()
+
+        # total = 0
+        # correct = np.zeros(1000, dtype=float)
+        # for X, y in compressor_loader:
+        #     optimizer.zero_grad()
+
+        #     if total == 0:
+        #         predicted_y, hidden = compressor_model(X)
+        #     else:
+        #         predicted_y, hidden = compressor_model(X, hc=mem)
                 
-                idx = np.argmin(dis)
+        #     loss = criterion(predicted_y, y)
+        #     loss.backward()
+        #     optimizer.step()
 
-                if idx != communities[-1]:
-                    communities.append(idx)  
-                    current_community = communities[-1]
-                    prev_community = community.clone()
-                else:
-                    community[0][0:short_term_memory-1] = community[0][1:short_term_memory].clone()
-                    community[0][-1] = centroids[current_community].view(1,1,-1)[0].clone()
-                
+        #     with torch.no_grad():
+        #         mem = hidden.clone()
 
-                dis = []
-                min_dis = 10
-                min_dis_id = -1
-                for jj in range(len(centroids)):
-                    dis.append(
-                        compute_geodesic(centroids[jj].detach().numpy(), mem.detach().numpy())
-                    )
-                    if min_dis >= dis[-1]:
-                        min_dis = dis[-1] 
-                        min_dis_id = jj 
-                if min_dis < threshold:
-                    centroids[min_dis_id] = (centroids[min_dis_id] + mem)/2.0
-                else:
-                    centroids.append(mem)
+        #         true_y = y.argmax(axis=1)
+        #         estimated_y = predicted_y.argmax(axis=1)
 
-                # print(min_dis)   
-                # print(X_hat, X_hat.size())
-                X_hat = torch.nn.functional.softmax(X_hat, dim=1)
-                dist_categ = torch.distributions.Categorical(probs=X_hat.reshape(-1))
-                idx = dist_categ.sample()
+        #         if estimated_y[0]:
+        #             compression.append((true_y[0],estimated_y[0],tokens[X.argmax(axis=1)]))
+                    
+        #         total += 1
+        #         # if true_y == estimated_y:
+        #         #     correct[total%1000] = 1
+        #         # else:
+        #         #     correct[total%1000] = 0
 
-                X_hat = torch.zeros(len(tokens),dtype=torch.float32)
-                X_hat[idx] = 1.0
-                X_hat = X_hat.reshape(1,1,-1) 
 
         #%%
         network1.sleep_rnn.requires_grad_ = True
@@ -564,59 +649,66 @@ def main():
         # correct_task2 = np.zeros(1000,dtype=float)
         for (X, y), (X_, y_) in zip(sleep_loader_task2, sleep_loader_task1):
 
+            with torch.no_grad():
+                if total == 0:
+                    community = X.clone()
+                    prev_community = X.clone()
+                    predicted_y, hidden = compressor_model(X[0])
+                else:
+                    predicted_y, hidden = compressor_model(X[0], hc=hidden)
+
+                selection = predicted_y.argmax(axis=1)
+
+
+                if selection:        
+                    community = prev_community.clone()
+                    prev_community = X.clone()
+
+            ##############################################
+                if total == 0:
+                    community_ = X_.clone()
+                    prev_community_ = X_.clone()
+                    predicted_y_, hidden_ = compressor_model(X_[0])
+                else:
+                    predicted_y_, hidden_ = compressor_model(X_[0], hc=hidden_)
+
+                selection_ = predicted_y_.argmax(axis=1)
+
+
+                if selection_:        
+                    community_ = prev_community_.clone()
+                    prev_community_ = X_.clone()
             ####################################################################
             optimizer.zero_grad()
             if total == 0:
-                predicted_y, hidden_w = network1(X)
-            elif total==1:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, sleep=True)
+                predicted_y, hidden_w, hidden_s = network1(X, community, sleep=True)
             else:
-                predicted_y, hidden_w, hidden_s = network1(X, prev_community, hw=mem, hs=mem_, sleep=True)
-
-            loss = criterion(predicted_y, y)
-            loss.backward(retain_graph=True)
+                predicted_y, hidden_w, hidden_s = network1(X, community, hw=mem, hs=mem_, sleep=True)
+                
+            loss = criterion(predicted_y[0], y)
+            loss.backward()
             optimizer.step()
 
-
             with torch.no_grad():
-                if total == 0:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, sleep=True)
-                else:
-                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community, hw=hidden_w_, hs=hidden_s_, sleep=True)
-
-                dis = []
-                for center in centroids:
-                    dis.append(
-                        compute_geodesic(center.detach().numpy(), hidden_w.detach().numpy())
-                    )
-                
-                idx = np.argmin(dis)
-
-                if idx != communities[-1]:
-                    communities.append(idx)  
-                    current_community = communities[-1]
-                    prev_community = community.clone()
-                else:
-                    community[0][0:short_term_memory-1] = community[0][1:short_term_memory].clone()
-                    community[0][-1] = centroids[current_community].view(1,1,-1)[0].clone()
-                
-                mem=hidden_w.detach().clone()
-
-                if total != 0:
-                    mem_=hidden_s.clone()
-
+                mem=hidden_w.clone()
+                mem_=hidden_s.clone()
                 true_y = y.argmax(axis=1)
-                # print(predicted_y)
-                estimated_y = predicted_y.argmax(axis=1)
+                estimated_y = predicted_y.argmax(axis=2)
+
+                if total == 0:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, sleep=True)
+                else:
+                    predicted_y_, hidden_w_, hidden_s_ = network1(X_, community_, hw=hidden_w_, hs=hidden_s_, sleep=True)
+
+                true_y_ = y_.argmax(axis=1)
+                estimated_y_ = predicted_y_.argmax(axis=2)
 
                 total += 1
                 if true_y == estimated_y:
-                        correct_task2[total%1000] = 1
+                    correct_task2[total%1000] = 1
                 else:
                     correct_task2[total%1000] = 0
 
-                true_y_ = y_.argmax(axis=1)
-                estimated_y_ = predicted_y_.argmax(axis=1)
 
                 if true_y_ == estimated_y_:
                     correct_task1[total%1000] = 1
@@ -638,7 +730,7 @@ def main():
         result_task2.append(test_acc_task2)
     
     summary = (result_task1, result_task2)
-    with open('pickle_files/clustering_CL_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
+    with open('pickle_files/chunking_CL_'+str(args.bptt)+'_'+str(args.node), 'wb') as f:
         pickle.dump(summary, f)
 
 

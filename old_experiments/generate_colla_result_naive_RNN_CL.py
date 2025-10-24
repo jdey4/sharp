@@ -2,7 +2,7 @@
 ## Load my files ##
 import sys
 sys.path.append('..')
-from utils import get_sequence
+from source.utils import get_sequence
 
 ## Load standard files ##
 import torch

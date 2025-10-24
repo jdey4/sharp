@@ -1,3 +1,4 @@
 pickle_files/*
 dataset/*
 .ipynb_checkpoints
+__pycache__
