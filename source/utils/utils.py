@@ -3,7 +3,8 @@ import torch
 import torch.nn.functional as F
 import math
 import random
-
+from torch.utils.data import Dataset
+from torch import from_numpy as tnsr
 
 def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
 
@@ -247,3 +248,24 @@ class PatternedSequenceGenerator:
 # }
 # grammar_seq = generator.grammar_sequence(grammar_rules, start_token="A", length=25)
 # print("Grammar Sequence:", grammar_seq)
+
+# =========================
+# Dataset
+# =========================
+
+class DatasetConverter(Dataset):
+    def __init__(self, data, working_memory=1, short_term_memory=3):
+        self.X = np.zeros((len(data)-working_memory-short_term_memory, short_term_memory), dtype=np.int64)
+        self.y = np.zeros((len(data)-working_memory-short_term_memory, 1), dtype=np.int64)
+        for i in range(self.X.shape[0]):
+            for j in range(self.X.shape[1]):
+                self.X[i, j] = ord(data[i+j]) - 65
+            self.y[i] = ord(data[i+j+1]) - 65
+        self.X = tnsr(self.X).long()
+        self.y = tnsr(self.y).long()
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+    def __len__(self):
+        return self.X.shape[0]

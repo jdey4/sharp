@@ -15,13 +15,11 @@ class Memory(nn.Module):
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
-            dec_in = input_size
         else:
             self.encoder = nn.RNN(input_size, hidden_size, batch_first=True)
-            dec_in = input_size
 
-        self.decoder = nn.RNN(dec_in, hidden_size, batch_first=True)
-        self.out = nn.Linear(hidden_size, dec_in)
+        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
+        self.out = nn.Linear(hidden_size, input_size)
 
         # init
         for name, p in self.encoder.named_parameters():

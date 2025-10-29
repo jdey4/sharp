@@ -1,5 +1,6 @@
+#%%
 import sys
-sys.path.append('..')
+sys.path.append('../..')
 from source.utils import get_sequence
 
 import torch
@@ -10,7 +11,7 @@ from torch import from_numpy as tnsr
 import numpy as np
 import itertools
 from collections import deque
-
+#%%
 
 # =========================
 # Dataset
@@ -190,13 +191,15 @@ def sleep_train_from_source(
     upper_mb, upper_opt, upper_crit = mem_blocks[target_upper], mem_opts[target_upper], mem_criteria[target_upper]
     train_stride = max(1, short_term_memory)
 
+    tokens = []
     for t in range(replay_steps):
         with torch.no_grad():
             if source_level == 0:
                 ctx1 = pred_blocks[1](h_gen[1]) if total_layers > 1 else None
-                logits0 = pred_blocks[0](h_gen[0], ctx1)
+                logits0 = pred_blocks[0](h_gen[0], None)# ctx1)
                 probs0 = torch.softmax(logits0[0, 0], dim=-1)
                 token = torch.multinomial(probs0, num_samples=1)
+                tokens.append(chr(token.item() + 65))
                 h_gen[0] = mem_blocks[0].encode_step_from_token(token, h_gen[0])
             else:
                 up_ctx = pred_blocks[source_level + 1](h_gen[source_level + 1]) \
@@ -208,9 +211,9 @@ def sleep_train_from_source(
                 h_gen[source_level] = mem_blocks[source_level].encode_step_from_vec(pred_lower, h_gen[source_level])
 
             # propagate upward one step
-            for l in range(source_level + 1, total_layers):
+            '''for l in range(source_level + 1, total_layers):
                 # feed the *current* lower hidden as a single-step vector
-                h_gen[l] = mem_blocks[l].encode_step_from_vec(h_gen[l - 1], h_gen[l])
+                h_gen[l] = mem_blocks[l].encode_step_from_vec(h_gen[l - 1], h_gen[l])'''
 
         if (t % train_stride) == 0:
             stm_queue.append(h_gen[target_upper - 1].detach().clone())
@@ -218,7 +221,8 @@ def sleep_train_from_source(
             _ = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_upper)
 
     unfreeze_range(mem_blocks, 0, total_layers - 1)
-
+    if tokens:
+        print(tokens)
 
 # =========================
 # Main
@@ -226,20 +230,20 @@ def sleep_train_from_source(
 
 def main():
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 1000000, 2, 6
-    total_layers, short_term_memory = 3, 4
+    total_samples, n_community, n_members = 1000000, 2, 5
+    total_layers, short_term_memory = 3, 5
 
     vocab_size = n_community * n_members + 1
-    hidden_size_memory = [60, 180, 540][:total_layers]
+    hidden_size_memory = [60, 180, 540, 1000][:total_layers]
     emb_dim_l0 = 20
 
     # Explicit per-layer hidden sizes for prediction heads
-    pred_hidden_sizes = [60, 180, 540][:total_layers]  # freely change if you like
+    pred_hidden_sizes = [60, 180, 540, 1000][:total_layers]  # freely change if you like
 
     lr_memory = [1e-4] + [5e-5] * (total_layers - 1)
     lr_prediction = 1e-3
     sleep_interval_wake = 10000
-    sleep_steps_per_L = {l: 10000 for l in range(1, total_layers)}
+    sleep_steps_per_L = {l: 1000 for l in range(1, total_layers)}
 
     # ---- NEW: per-layer wake-time strides ----
     # layer_strides[L] applies to updating h_states[L] from h_states[L-1] during WAKE.
@@ -271,7 +275,7 @@ def main():
                                 lr=lr_prediction, weight_decay=1e-8)
 
     # ---- Data ----
-    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)
+    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/(n_members))
     dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -342,10 +346,12 @@ def main():
                     sleep_train_from_source(src, steps, short_term_memory,
                                             mem_blocks, mem_opts, mem_criteria,
                                             pred_blocks, h_states, total_layers,
-                                            sigma=0.0 if src == 0 else 0.5)
+                                            sigma=0.0)
 
     print("Training complete.")
 
 
 if __name__ == "__main__":
     main()
+
+# %%
