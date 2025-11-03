@@ -191,7 +191,7 @@ def sleep_train_from_source(
     upper_mb, upper_opt, upper_crit = mem_blocks[target_upper], mem_opts[target_upper], mem_criteria[target_upper]
     train_stride = max(1, short_term_memory)
 
-    tokens = []
+    #tokens = []
     for t in range(replay_steps):
         with torch.no_grad():
             if source_level == 0:
@@ -199,7 +199,7 @@ def sleep_train_from_source(
                 logits0 = pred_blocks[0](h_gen[0], None)# ctx1)
                 probs0 = torch.softmax(logits0[0, 0], dim=-1)
                 token = torch.multinomial(probs0, num_samples=1)
-                tokens.append(chr(token.item() + 65))
+                #tokens.append(chr(token.item() + 65))
                 h_gen[0] = mem_blocks[0].encode_step_from_token(token, h_gen[0])
             else:
                 up_ctx = pred_blocks[source_level + 1](h_gen[source_level + 1]) \
@@ -221,8 +221,8 @@ def sleep_train_from_source(
             _ = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_upper)
 
     unfreeze_range(mem_blocks, 0, total_layers - 1)
-    if tokens:
-        print(tokens)
+    #if tokens:
+    #    print(tokens)
 
 # =========================
 # Main
@@ -230,20 +230,20 @@ def sleep_train_from_source(
 
 def main():
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 1000000, 2, 5
-    total_layers, short_term_memory = 3, 5
+    total_samples, n_community, n_members = 1000000, 2, 8
+    total_layers, short_term_memory = 2, 3
 
     vocab_size = n_community * n_members + 1
-    hidden_size_memory = [60, 180, 540, 1000][:total_layers]
+    hidden_size_memory = [60, 80, 540, 1000][:total_layers]
     emb_dim_l0 = 20
 
     # Explicit per-layer hidden sizes for prediction heads
-    pred_hidden_sizes = [60, 180, 540, 1000][:total_layers]  # freely change if you like
+    pred_hidden_sizes = [60, 80, 540, 1000][:total_layers]  # freely change if you like
 
     lr_memory = [1e-4] + [5e-5] * (total_layers - 1)
     lr_prediction = 1e-3
     sleep_interval_wake = 10000
-    sleep_steps_per_L = {l: 1000 for l in range(1, total_layers)}
+    sleep_steps_per_L = {l: 10000 for l in range(1, total_layers)}
 
     # ---- NEW: per-layer wake-time strides ----
     # layer_strides[L] applies to updating h_states[L] from h_states[L-1] during WAKE.
@@ -275,7 +275,7 @@ def main():
                                 lr=lr_prediction, weight_decay=1e-8)
 
     # ---- Data ----
-    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/(n_members))
+    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)#/(n_members))
     dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 

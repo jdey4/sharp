@@ -59,18 +59,19 @@ def train_memory_layer(model, optimizer, criterion, X, layer=0):
 
     return loss.detach()
 
-def freeze_range(mem_blocks, start, end):
+def freeze_range(model_blocks, start, end):
     """
-    Freeze a contiguous range of memory layers, preventing weight updates.
+    Freeze a contiguous range of memory or prediction layers, preventing weight 
+    updates.
 
-    Sets `requires_grad = False` for all parameters of the memory blocks between
-    indices `start` and `end` (inclusive). This is typically used during the
-    sleep/replay phase to ensure lower layers remain fixed while higher layers
-    are being trained.
+    Sets `requires_grad = False` for all parameters of the memory and prediction 
+    blocks between indices `start` and `end` (inclusive). This is typically used 
+    during the sleep/replay phase to ensure lower layers remain fixed while higher 
+    layers are being trained.
 
     Args:
-        mem_blocks (list[nn.Module]):
-            List or container of memory blocks (e.g., RNNs, autoencoders, etc.).
+        model_blocks (list[nn.Module]):
+            List or container of model blocks (e.g., RNNs, autoencoders, etc.).
         start (int):
             Starting layer index (inclusive) to freeze.
         end (int):
@@ -81,21 +82,24 @@ def freeze_range(mem_blocks, start, end):
         # Freezes layers 0, 1, and 2.
     """
     for l in range(start, end + 1):
-        for p in mem_blocks[l].parameters():
+        for p in model_blocks[l].parameters():
             p.requires_grad = False
 
 
-def unfreeze_range(mem_blocks, start, end):
-    """
-    Unfreeze (re-enable gradient updates) for a contiguous range of memory layers.
 
-    Sets `requires_grad = True` for all parameters of memory blocks between indices
-    `start` and `end` (inclusive). This restores trainability after a period of
-    frozen operation (e.g., after the sleep-phase replay training).
+
+def unfreeze_range(model_blocks, start, end):
+    """
+    Unfreeze (re-enable gradient updates) for a contiguous range of memory and prediction
+    layers.
+
+    Sets `requires_grad = True` for all parameters of memory and prediction blocks 
+    between indices `start` and `end` (inclusive). This restores trainability after 
+    a period of frozen operation (e.g., after the sleep-phase replay training).
 
     Args:
-        mem_blocks (list[nn.Module]):
-            List or container of memory block modules.
+        model_blocks (list[nn.Module]):
+            List or container of memory or prediction block modules.
         start (int):
             Starting layer index (inclusive) to unfreeze.
         end (int):
@@ -106,141 +110,116 @@ def unfreeze_range(mem_blocks, start, end):
         # Unfreezes layers 0, 1, and 2.
     """
     for l in range(start, end + 1):
-        for p in mem_blocks[l].parameters():
+        for p in model_blocks[l].parameters():
             p.requires_grad = True
+    
 
-
-def build_contexts_topdown(pred_blocks, h_dict, total_layers):
-    """
-    Construct hierarchical top-down context signals for each layer.
-
-    Given a set of prediction modules (`pred_blocks`) and their corresponding hidden
-    states (`h_dict`), this function computes top-down contextual signals layer by
-    layer — starting from the topmost layer down to the lower layers.
-
-    The resulting dictionary `ctx` contains the predictive context at each layer,
-    which can be used during both wake (forward) and sleep (replay) phases.
-
-    Args:
-        pred_blocks (list[nn.Module]):
-            List of predictive modules that map hidden states to context vectors.
-            Typically, each block takes `(hidden, upper_context)` as input.
-        h_dict (dict[int, torch.Tensor or None]):
-            Dictionary of current hidden states for each layer.
-            Layers with `None` will be skipped.
-        total_layers (int):
-            Total number of layers in the hierarchy.
-
-    Returns:
-        dict[int, torch.Tensor or None]:
-            Dictionary mapping layer index → computed context tensor.
-            The top layer produces context from its own hidden state; lower layers
-            receive context modulated by upper-layer predictions.
-
-    Notes:
-        - Starts from the top layer (`total_layers - 1`) and propagates context downward.
-        - If a layer has no hidden state (`h_dict[l] is None`), its context is `None`.
-        - If an upper context exists (`ctx[l + 1]`), it is passed into the prediction block.
-        - This implements hierarchical top-down modulation similar to cortical feedback.
-
-    Example:
-        >>> ctx = build_contexts_topdown(pred_blocks, h_dict, total_layers=3)
-        >>> print(ctx[1].shape)  # Context vector for layer 1
-    """
-    ctx = {}
-    top = total_layers - 1
-    ctx[top] = pred_blocks[top](h_dict[top]) if h_dict[top] is not None else None
-
-    for l in range(top - 1, 0, -1):
-        if h_dict[l] is None:
-            ctx[l] = None
-        else:
-            if ctx[l + 1] is not None:
-                ctx[l] = pred_blocks[l](h_dict[l], ctx[l + 1])
-            else:
-                ctx[l] = pred_blocks[l](h_dict[l])
-    return ctx
 
 # =========================
 # Train Pattern Recognition Blocks 
 # =========================
-
 def train_pattern_recognition(
-    pred_blocks, pred_layer, optimizer, criterion,
-    h, target, context=None
+        pred_blocks, optimizer, criteria,
+        h_input, h_target, context
 ):
     """
-    Perform one supervised training step for a prediction block within the hierarchical model.
+    Jointly trains all hierarchical prediction (generative) heads with shared gradients.
 
-    This function trains a single prediction module (`pred_blocks[pred_layer]`) to map
-    its current hidden state (and optionally contextual input) to a target output.
-    It executes a standard forward-backward optimization pass and returns the detached
-    loss tensor for logging.
+    This function performs a *coupled* optimization step across all predictive layers
+    of the hierarchy.  Each prediction head `pred_blocks[l]` receives its current-layer
+    hidden state `h_input[l]` and an optional top-down `context[l]`, and produces a
+    prediction that is compared against a supervision target.  The total multi-layer
+    loss is accumulated and back-propagated jointly through all layers, allowing
+    cross-layer gradient flow.
 
-    Args:
-        pred_blocks (list[nn.Module]):
-            A list (or dict-like container) of prediction modules.
-            Each element maps hidden representations to output predictions.
+    Parameters
+    ----------
+    pred_blocks : list[nn.Module]
+        List or dict-like container of `Prediction` modules, one per hierarchical layer.
+        Each block maps its current hidden representation (and optional context) to a
+        target output—typically a token distribution for layer 0 and hidden-state
+        predictions for higher layers.
 
-        pred_layer (int):
-            Index of the prediction block to be trained.
+    optimizer : torch.optim.Optimizer
+        Optimizer that manages parameters of *all* prediction heads simultaneously.
+        Coupled optimization ensures global gradient flow and joint temporal credit
+        assignment across layers.
 
-        optimizer (torch.optim.Optimizer):
-            Optimizer corresponding to `pred_blocks[pred_layer]`.
-            It is assumed that it manages only that layer’s parameters.
+    criteria : list[nn.Module]
+        Loss functions per layer.  For example:
+        - `nn.CrossEntropyLoss()` for layer 0 (token prediction)
+        - `nn.MSELoss()` for higher layers (hidden-state prediction)
 
-        criterion (nn.Module):
-            Loss function used for supervision (e.g., CrossEntropyLoss or MSELoss).
+    h_input : list[torch.Tensor]
+        List of current hidden states, one per layer.  
+        `h_input[l]` has shape `(B, T, H_l)` or `(B, 1, H_l)` depending on layer setup.
 
-        h (torch.Tensor):
-            Input hidden state tensor for this prediction layer.
-            Shape typically `(batch, time, hidden_dim)` or `(batch, hidden_dim)`.
+    h_target : torch.Tensor or list[torch.Tensor]
+        Target signal(s) for supervision.  For the bottom layer this is usually the next
+        token index, while upper layers may receive next-step hidden states or other
+        continuous targets.  A single tensor may be broadcast to all layers if shared.
 
-        target (torch.Tensor):
-            Ground-truth labels or regression targets compatible with `criterion`.
+    context : list[torch.Tensor or None]
+        Optional contextual inputs from higher layers.  
+        If provided, `context[l]` is concatenated with `h_input[l]` inside each
+        prediction head.  May be `None` for topmost layer.
 
-        context (torch.Tensor, optional):
-            Optional contextual input from a higher or lower layer.
-            Default is `None`.
+    Returns
+    -------
+    logits : torch.Tensor
+        Output logits of the final layer processed in the loop (often layer 0).
+        Returned detached from the graph for logging or evaluation.
 
-    Returns:
-        torch.Tensor:
-            The detached scalar loss tensor (no gradient attached),
-            suitable for logging or monitoring.
+    loss : torch.Tensor
+        Detached scalar total loss value (sum of per-layer losses).
 
-    Example:
-        >>> loss = train_pattern_recognition(pred_blocks, 0, optimizer, loss_fn, h, y)
-        >>> print(f"Training loss: {loss.item():.4f}")
+    Notes
+    -----
+    • **Coupled optimization**:
+      Unlike per-layer training, this routine accumulates all layer losses before
+      performing a single backward pass.  This allows gradients to propagate through
+      the entire predictive hierarchy, aligning generation weights at all levels.
 
-    Notes:
-        - The function sets the target prediction module into training mode (`.train()`),
-          ensuring layers like dropout or batch normalization behave appropriately.
-        - Gradients are zeroed, forward pass is computed, loss is backpropagated, and
-          parameters are updated in place.
-        - Returning `loss.detach()` allows the caller to log the loss without maintaining
-          computational graph references.
+    • **Analogy to wake-sleep learning**:
+      - Memory / encoder modules act as *recognition weights* (bottom-up inference).
+      - Prediction heads act as *generative weights* (top-down reconstruction).
+      Joint training makes the system behave like a continuous wake-sleep phase,
+      where recognition and generation paths co-adapt in the same gradient step.
+
+    • **Typical layer semantics**:
+      | Layer | Input                     | Target                     | Loss |
+      |-------|---------------------------|-----------------------------|------|
+      | 0     | token-level hidden state  | next token label            | CE   |
+      | 1     | compressed hidden state   | next lower-layer hidden     | MSE  |
+      | ...   | ...                       | ...                         | ...  |
+
+    Example
+    -------
+    >>> logits, loss = train_pattern_recognition(
+    ...     pred_blocks, optimizer, criteria,
+    ...     h_input=[h0, h1], h_target=y, context=[ctx0, ctx1]
+    ... )
+    >>> print(f"Total predictive loss: {loss.item():.4f}")
     """
 
+    total_layers = len(pred_blocks)
+    loss = 0.0
     with torch.enable_grad():
-        pred_blocks[pred_layer].train()
         optimizer.zero_grad()
-
-        #print(h.shape, context.shape if context is not None else 'None', 'context')
-        logits = pred_blocks[pred_layer](h, context)
-        #print(logits[0,0], target[0,0])
-
-        if pred_layer == 0:
-            loss = criterion(logits[0, 0], target[0, 0])
-        else:
-            loss = criterion(logits, target)
+        for l in range(total_layers):
+            pred_blocks[l].train()
+            if l == 0:
+                logits = pred_blocks[0](h_input[l], context[l])
+                layer_loss = criteria[0](logits[0, 0], h_target[0, 0])
+            else:
+                logits_ = pred_blocks[l](h_input[l], context[l])
+                layer_loss = criteria[l](logits_, h_target)
+            loss += layer_loss
 
         loss.backward()
         optimizer.step()
 
-    if pred_layer == 0:
-        return logits, loss.detach()
-    else:
-        return loss.detach()
+        return logits.detach(), loss.detach()
 
 
 # =========================
@@ -248,26 +227,85 @@ def train_pattern_recognition(
 # =========================
 def sleep_train_layer(
     target_layer, replay_steps, short_term_memory,
-    mem_blocks, mem_opts, mem_criteria, pred_blocks,
-    sigma=0.00, ema_alpha=0.1
+    mem_blocks, mem_opts, mem_criteria, 
+    pred_blocks, sigma=0.00, ema_alpha=0.1
 ):
     """
-    Sleep-phase replay training for hierarchical memory layers with EMA smoothing.
+    Performs sleep-phase replay and hierarchical consolidation for the specified target layer.
+
+    During the sleep phase, the lower (source) layer generates synthetic hidden-state
+    trajectories (or token-driven sequences) which act as replayed experience.
+    The target (upper) layer learns to compress or reconstruct these replay patterns,
+    enabling slow consolidation of fast-learned episodic traces into long-term memory.
+
+    This function emulates the hippocampal-cortical consolidation process seen in
+    wake-sleep algorithms and biological replay systems. It stabilizes generated
+    dynamics via exponential moving average (EMA) smoothing and optionally injects
+    stochastic noise to mimic spontaneous reactivation variability (e.g., SWRs).
 
     Args:
-        target_layer: int, which layer to train.
-        replay_steps: number of replay cycles per stride.
-        short_term_memory: memory window length.
-        mem_blocks, mem_opts, mem_criteria, pred_blocks: module lists.
-        total_layers: total number of layers.
-        sigma: noise level for replay (default 0.0).
-        ema_alpha: exponential moving average factor (default 0.1).
+        target_layer (int): 
+            Index of the memory layer to train during sleep.
+            The layer below (target_layer - 1) is treated as the replay source.
+
+        replay_steps (int): 
+            Number of synthetic replay steps to generate from the source layer.
+
+        short_term_memory (int): 
+            Temporal window length (number of recent hidden states) to use as
+            input for training the target layer's memory block.
+
+        mem_blocks (list[nn.Module]): 
+            List of hierarchical memory (RNN/autoencoder) modules. 
+            Only the target layer is trained; lower layers are frozen during replay.
+
+        mem_opts (list[torch.optim.Optimizer]): 
+            Optimizers corresponding to each memory block.
+
+        mem_criteria (list[Callable]): 
+            Loss functions for each memory block, typically MSE for reconstruction.
+
+        pred_blocks (list[nn.Module]): 
+            List of associated prediction heads for each layer used to generate
+            next-step states or tokens during replay.
+
+        sigma (float, optional): 
+            Standard deviation of Gaussian replay noise (default: 0.0).
+            Adds variability to generated hidden states, encouraging robustness.
+
+        ema_alpha (float, optional): 
+            Exponential moving average coefficient (default: 0.1).
+            Higher values produce stronger smoothing and slower adaptation.
+
+    Returns:
+        None
+            Trains the target layer's memory block in-place. Prints the final replay loss.
+
+    Process Overview:
+        1. Freeze source (lower) layer modules to prevent gradient flow.
+        2. Initialize replay generator (hidden state) and short-term memory buffer.
+        3. Iteratively generate synthetic hidden sequences:
+            - For layer 0: sample tokens from softmax distribution.
+            - For higher layers: propagate hidden states via predictor.
+        4. Apply EMA smoothing to stabilize replay signals.
+        5. Every `short_term_memory` steps, downsample the replayed sequence,
+           concatenate recent hidden windows, and train the target layer using MSE loss.
+        6. Unfreeze source layer modules after completion.
+
+    Biological Analogy:
+        - Source layer ≈ hippocampus (fast learner, replay generator)
+        - Target layer ≈ cortex (slow learner, consolidator)
+        - Replay trajectories ≈ hippocampal reactivation during sleep
+        - EMA smoothing ≈ replay drift stabilization
+        - Noise (sigma) ≈ stochastic variability in neural replay
     """
+
     source_layer = target_layer - 1
     device = next(mem_blocks[source_layer].parameters()).device
 
     # Freeze lower layers during replay
-    freeze_range(mem_blocks, 0, source_layer)
+    freeze_range(mem_blocks, source_layer, source_layer)
+    freeze_range(pred_blocks, source_layer, source_layer)
 
     # Initialize buffers
     H_lower = mem_blocks[source_layer].hidden_size
@@ -284,45 +322,42 @@ def sleep_train_layer(
     train_stride = short_term_memory
 
     # Initialize hidden generators
-    h_gen = {
-        l: torch.zeros(1, 1, mem_blocks[l].hidden_size, device=device)
-        for l in [source_layer, target_layer]
-    }
+    h_gen = torch.zeros(1, 1, mem_blocks[source_layer].hidden_size, device=device)
 
     # Initialize EMA hidden
-    h_ema = torch.zeros_like(h_gen[source_layer])
+    h_ema = torch.zeros(1, 1, mem_blocks[source_layer].hidden_size, device=device)
+    h_target = torch.zeros(1, 1, mem_blocks[source_layer].hidden_size, device=device)
 
+    # Training loop
     total_steps = replay_steps * train_stride
     for t in range(1, total_steps + 1):
         with torch.no_grad():
             if source_layer == 0:
-                ctx1 = pred_blocks[1](h_gen[1])
-                logits0 = pred_blocks[0](h_gen[0], ctx1)
+                logits0 = pred_blocks[0](h_gen)
                 probs0 = torch.softmax(logits0[0, 0], dim=-1)
                 token = torch.multinomial(probs0, num_samples=1)
-                h_gen[0] = mem_blocks[0].encode_step_from_token(token, h_gen[0])
+                h_gen = mem_blocks[0].encode_step_from_token(token, h_gen)
             else:
-                up_ctx = pred_blocks[target_layer](h_gen[target_layer])
-                pred_lower = pred_blocks[source_layer](h_gen[source_layer], up_ctx)
+                #up_ctx = pred_blocks[target_layer](h_gen[target_layer])
+                pred_lower = pred_blocks[source_layer](h_gen)
                 if sigma > 0:
                     pred_lower = pred_lower + sigma * torch.randn_like(pred_lower)
-                h_gen[source_layer] = mem_blocks[source_layer].encode_step_from_vec(
-                    pred_lower, h_gen[source_layer]
-                )
+                h_gen = mem_blocks[source_layer].encode_step_from_vec(
+                                                    pred_lower, h_gen
+                                                )
 
         # --- EMA smoothing before downsampling ---
-        h_ema = ema_alpha * h_ema + (1 - ema_alpha) * h_gen[source_layer]
+        h_ema = ema_alpha * h_ema + (1 - ema_alpha) * h_gen
 
         # --- Downsampling / training trigger ---
         if t % train_stride == 0:
-            stm_queue.append(h_ema.clone())
+            stm_queue.append(h_target.clone())
+            h_target = h_ema.clone()
             window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-            loss = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_layer)
+            mem_loss = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_layer)
 
-            #if t % 100 == 0:
-            #    print('Sleeing loss ', loss)
     
-    print('Sleeping loss ', loss)
+    print('Sleeping memory loss ', mem_loss)
     # Unfreeze lower layers
-    unfreeze_range(mem_blocks, 0, source_layer)
+    unfreeze_range(mem_blocks, source_layer, source_layer)
 
