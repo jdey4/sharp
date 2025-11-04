@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import deque
 
-def train_memory_layer(model, optimizer, criterion, X, layer=0):
+def train_memory_layer(model, optimizer, criterion, X, layer=0, eps=1e-3):
     """
     Perform one supervised or self-reconstruction training step for a memory block.
 
@@ -53,8 +53,9 @@ def train_memory_layer(model, optimizer, criterion, X, layer=0):
             logits, _ = model(X)
             loss = criterion(logits, X)
 
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if loss > eps:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
     return loss.detach()
@@ -119,104 +120,108 @@ def unfreeze_range(model_blocks, start, end):
 # Train Pattern Recognition Blocks 
 # =========================
 def train_pattern_recognition(
-        pred_blocks, optimizer, criteria,
-        h_input, h_target, context
+    pred_blocks, optimizer, criteria,
+    h_input, h_target, alpha=0.01, eps=5e-3
 ):
     """
-    Jointly trains all hierarchical prediction (generative) heads with shared gradients.
+    Jointly trains all hierarchical predictive (generative) heads with internally generated context.
 
-    This function performs a *coupled* optimization step across all predictive layers
-    of the hierarchy.  Each prediction head `pred_blocks[l]` receives its current-layer
-    hidden state `h_input[l]` and an optional top-down `context[l]`, and produces a
-    prediction that is compared against a supervision target.  The total multi-layer
-    loss is accumulated and back-propagated jointly through all layers, allowing
-    cross-layer gradient flow.
+    This routine performs *coupled multi-layer optimization* where each prediction head
+    receives not only its current-layer hidden state but also a **top-down contextual
+    signal** generated internally by the layer above.  Context signals are propagated
+    downward through the hierarchy during training, enabling co-adaptation of all
+    predictive levels in a single gradient step.
+
 
     Parameters
     ----------
     pred_blocks : list[nn.Module]
-        List or dict-like container of `Prediction` modules, one per hierarchical layer.
-        Each block maps its current hidden representation (and optional context) to a
-        target output—typically a token distribution for layer 0 and hidden-state
-        predictions for higher layers.
+        List of hierarchical `Prediction` modules.  Each module defines a mapping:
+        `context[l-1] = pred_blocks[l](h_input[l], context[l])`,
+        where higher layers provide contextual priors to lower layers.
 
     optimizer : torch.optim.Optimizer
-        Optimizer that manages parameters of *all* prediction heads simultaneously.
-        Coupled optimization ensures global gradient flow and joint temporal credit
-        assignment across layers.
+        Optimizer jointly managing parameters of all predictive heads.  
+        A single backward pass updates all layers simultaneously.
 
     criteria : list[nn.Module]
-        Loss functions per layer.  For example:
-        - `nn.CrossEntropyLoss()` for layer 0 (token prediction)
-        - `nn.MSELoss()` for higher layers (hidden-state prediction)
+        Layer-specific loss functions:
+        - Layer 0: `CrossEntropyLoss()` for token-level prediction.
+        - Higher layers: typically `MSELoss()` for reconstructing lower-layer states.
 
     h_input : list[torch.Tensor]
-        List of current hidden states, one per layer.  
-        `h_input[l]` has shape `(B, T, H_l)` or `(B, 1, H_l)` depending on layer setup.
+        List of per-layer hidden activations obtained from the memory modules.
+        Shape per layer: `(B, T, H_l)` or `(B, 1, H_l)`.
 
     h_target : torch.Tensor or list[torch.Tensor]
-        Target signal(s) for supervision.  For the bottom layer this is usually the next
-        token index, while upper layers may receive next-step hidden states or other
-        continuous targets.  A single tensor may be broadcast to all layers if shared.
-
-    context : list[torch.Tensor or None]
-        Optional contextual inputs from higher layers.  
-        If provided, `context[l]` is concatenated with `h_input[l]` inside each
-        prediction head.  May be `None` for topmost layer.
+        Ground-truth supervision signal(s).  
+        Usually next-token indices for layer 0 and hidden-state targets for upper layers.
 
     Returns
     -------
     logits : torch.Tensor
-        Output logits of the final layer processed in the loop (often layer 0).
-        Returned detached from the graph for logging or evaluation.
+        Final output logits from the bottom (token) layer, detached for logging or evaluation.
 
     loss : torch.Tensor
-        Detached scalar total loss value (sum of per-layer losses).
+        Total scalar loss (sum of all layer-wise losses), detached from the graph.
 
-    Notes
-    -----
-    • **Coupled optimization**:
-      Unlike per-layer training, this routine accumulates all layer losses before
-      performing a single backward pass.  This allows gradients to propagate through
-      the entire predictive hierarchy, aligning generation weights at all levels.
+    Training Logic
+    --------------
+    1. Initialize an empty context dictionary with `context[top] = None`.
+    2. Traverse layers **top-down** (from highest to lowest):
+       - Each layer `l` uses its input `h_input[l]` and current top-down context `context[l]`
+         to produce either:
+           - a new context for the lower layer (`context[l-1]`), or
+           - final logits at layer 0.
+       - Compute the layer-specific loss and accumulate it into `loss`.
+    3. Perform a single backward() call and optimizer step, ensuring joint gradient flow.
 
-    • **Analogy to wake-sleep learning**:
-      - Memory / encoder modules act as *recognition weights* (bottom-up inference).
-      - Prediction heads act as *generative weights* (top-down reconstruction).
-      Joint training makes the system behave like a continuous wake-sleep phase,
-      where recognition and generation paths co-adapt in the same gradient step.
+    Behavioral Intuition
+    --------------------
+    - The top layer generates abstract context vectors that influence predictions at lower levels.
+    - Lower layers, in turn, align their generative outputs with supervised targets.
+    - This internal context propagation allows **cross-layer gradient coupling**, promoting
+      coherent representations across the hierarchy (analogous to feedback alignment).
 
-    • **Typical layer semantics**:
-      | Layer | Input                     | Target                     | Loss |
-      |-------|---------------------------|-----------------------------|------|
-      | 0     | token-level hidden state  | next token label            | CE   |
-      | 1     | compressed hidden state   | next lower-layer hidden     | MSE  |
-      | ...   | ...                       | ...                         | ...  |
+    Biological / Algorithmic Analogy
+    --------------------------------
+    - Top-down context ≈ cortical feedback to sensory areas.
+    - Layer-0 predictor ≈ sensory decoder or token predictor.
+    - Coupled loss ≈ synchronized wake-sleep update (shared generative and recognition weights).
 
     Example
     -------
     >>> logits, loss = train_pattern_recognition(
     ...     pred_blocks, optimizer, criteria,
-    ...     h_input=[h0, h1], h_target=y, context=[ctx0, ctx1]
+    ...     h_input=[h0, h1], h_target=y
     ... )
-    >>> print(f"Total predictive loss: {loss.item():.4f}")
+    >>> print(f"Coupled predictive loss: {loss.item():.4f}")
+
+    Notes
+    -----
+    • Internal context replaces external input — the model learns to self-generate priors.  
+    • Traversal order is reversed (top → bottom) to enable downward context propagation.  
+    • The resulting hierarchy behaves like a *predictive coding network* where error and
+      prediction flow are intertwined during training.
     """
 
     total_layers = len(pred_blocks)
     loss = 0.0
+    context = {total_layers-1: None}
     with torch.enable_grad():
         optimizer.zero_grad()
-        for l in range(total_layers):
+        for l in range(total_layers-1,-1,-1):
             pred_blocks[l].train()
             if l == 0:
                 logits = pred_blocks[0](h_input[l], context[l])
-                layer_loss = criteria[0](logits[0, 0], h_target[0, 0])
+                layer_loss = criteria[0](logits[0, 0], h_target[0][0, 0])
             else:
-                logits_ = pred_blocks[l](h_input[l], context[l])
-                layer_loss = criteria[l](logits_, h_target)
+                context[l-1] = pred_blocks[l](h_input[l], context[l])
+                layer_loss = alpha*criteria[l](context[l-1], h_target[l])
             loss += layer_loss
 
-        loss.backward()
+        if loss > eps:
+            loss.backward()
         optimizer.step()
 
         return logits.detach(), loss.detach()
@@ -228,7 +233,7 @@ def train_pattern_recognition(
 def sleep_train_layer(
     target_layer, replay_steps, short_term_memory,
     mem_blocks, mem_opts, mem_criteria, 
-    pred_blocks, sigma=0.00, ema_alpha=0.1
+    pred_blocks, sigma=0.00, ema_alpha=0.1, eps=1e-2
 ):
     """
     Performs sleep-phase replay and hierarchical consolidation for the specified target layer.
@@ -354,10 +359,11 @@ def sleep_train_layer(
             stm_queue.append(h_target.clone())
             h_target = h_ema.clone()
             window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-            mem_loss = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_layer)
+            mem_loss = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_layer, eps=eps)
 
     
     print('Sleeping memory loss ', mem_loss)
     # Unfreeze lower layers
     unfreeze_range(mem_blocks, source_layer, source_layer)
+    unfreeze_range(pred_blocks, source_layer, source_layer)
 
