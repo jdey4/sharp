@@ -339,14 +339,14 @@ def main():
                     if h_states[l] is None and h_states[l - 1] is not None:
                         h_states[l] = mem_blocks[l].encode_step_from_vec(h_states[l - 1], None)
 
-            for src in range(total_layers - 1):
+            '''for src in range(total_layers - 1):
                 steps = sleep_steps_per_L.get(src + 1, 0)
                 if steps > 0:
                     print(f"  Sleep: source L{src} -> train L{src+1} ({steps} steps)")
                     sleep_train_from_source(src, steps, short_term_memory,
                                             mem_blocks, mem_opts, mem_criteria,
                                             pred_blocks, h_states, total_layers,
-                                            sigma=0.0)
+                                            sigma=0.0)'''
 
     print("Training complete.")
 
