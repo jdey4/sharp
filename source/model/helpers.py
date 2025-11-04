@@ -30,6 +30,10 @@ def train_memory_layer(model, optimizer, criterion, X, layer=0, eps=1e-3):
             using averaged loss across time. If greater than 0, the model is trained
             to reconstruct the entire sequence at once.
             Default is `0`.
+        eps (float, optional):
+            Threshold for loss. The weights are updated if the loss exceeds this value.
+            Default is `1e-3`.
+
 
     Returns:
         torch.Tensor:
@@ -156,6 +160,10 @@ def train_pattern_recognition(
     h_target : torch.Tensor or list[torch.Tensor]
         Ground-truth supervision signal(s).  
         Usually next-token indices for layer 0 and hidden-state targets for upper layers.
+    
+    eps (float, optional):
+        Threshold for loss. The weights are updated if the loss exceeds this value.
+        Default is `5e-3`.
 
     Returns
     -------
@@ -281,6 +289,10 @@ def sleep_train_layer(
         ema_alpha (float, optional): 
             Exponential moving average coefficient (default: 0.1).
             Higher values produce stronger smoothing and slower adaptation.
+        
+        eps (float, optional):
+            Threshold for loss. The weights are updated if the loss exceeds this value.
+            Default is `1e-2`.
 
     Returns:
         None
