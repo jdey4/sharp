@@ -75,10 +75,9 @@ def main():
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     # ---- States ----
-    h_states = {l: None for l in range(total_layers)}
-    h_targets = {l: None for l in range(total_layers)}
-    #cntxt = {l: None for l in range(total_layers-1)}
-    h_ema = {l: None for l in range(total_layers)}
+    h_states = {}
+    h_targets = {}
+    h_ema = {}
 
     for ii in range(total_layers):
         h_states[ii] = torch.zeros(1, 1, hidden_size_memory[ii])
