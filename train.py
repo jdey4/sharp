@@ -18,7 +18,7 @@ from collections import deque
 #%%
 def main():
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 5000000, 2, 14
+    total_samples, n_community, n_members = 5000000, 2, 17
     total_layers, short_term_memory = 3, 3
 
     vocab_size = n_community * n_members + 1
@@ -29,11 +29,10 @@ def main():
     pred_hidden_sizes = hidden_size_memory #[60, 180, 540][:total_layers]  
 
     lr_memory = [1e-3] + [1e-3] * (total_layers - 1)
-    grad_eps = [1e-3, 1e-1, 2e-1, 2e-1]
-    pred_eps = 5e-2
+    grad_eps = [1e-3, 1e-1, 1e-1, 2e-1]
+    pred_eps = 1e-2
     lr_prediction = 4e-4
     ema_alpha = 0.3
-    sparsity_lamda = 0
     sleep_interval_wake = 30000
     sleep_steps_per_L = {1:10000, 2:1000, 3:1000} #{l: 1000 for l in range(1, total_layers)}
 
@@ -82,6 +81,8 @@ def main():
     h_ema = {l: None for l in range(total_layers)}
 
     for ii in range(total_layers):
+        h_states[ii] = torch.zeros(1, 1, hidden_size_memory[ii])
+        h_targets[ii] = torch.zeros(1, 1, hidden_size_memory[ii-1]) if ii>0 else torch.zeros(1, 1)
         h_ema[ii] = torch.zeros(1, 1, hidden_size_memory[ii])
     
 
@@ -100,9 +101,9 @@ def main():
             h_states[0]  = h0                 # (1,1,H0)
             h_targets[0] = y
 
-            if total_layers>1 and total % layer_strides[1] == 0:
+            '''if total_layers>1 and total % layer_strides[1] == 0:
                 _, h0_next = mem_blocks[0](torch.cat((X[:,1:],y), dim=1))
-                h_targets[1] = h0_next            # (1,1,H0)
+                h_targets[1] = h0_next            # (1,1,H0)'''
 
             # Strided updates for upper layers: only update when total % layer_strides[l] == 0
             h_ema[0] = ema_alpha * h_ema[0] + (1 - ema_alpha) * h_states[0]
@@ -113,16 +114,17 @@ def main():
                     # Single-step encode from upper layer
                     with torch.no_grad():
                         #print(l, h_states[l])
-                        h_states[l] = mem_blocks[l].encode_step_from_vec(h_ema[l-1], h_states[l])
-
-                        if l+1 < total_layers:
-                            h_targets[l+1] = mem_blocks[l].encode_step_from_vec(h_targets[l], h_states[l])
+                        h_states[l] = mem_blocks[l].encode_step_from_vec(h_targets[l], h_states[l])
+                        h_targets[l] = h_ema[l-1]
+                        
+                        '''if l+1 < total_layers:
+                            h_targets[l+1] = mem_blocks[l].encode_step_from_vec(h_targets[l], h_states[l])'''
                             
                         h_ema[l] = ema_alpha * h_ema[l] + (1 - ema_alpha) * h_states[l]
 
         logits, loss = train_pattern_recognition(
                                     pred_blocks, pred_opt, pred_criteria, 
-                                    h_states, h_targets, alpha=1e-3, eps=pred_eps
+                                    h_states, h_targets, alpha=1e-1, eps=pred_eps
                                 )
             
         
