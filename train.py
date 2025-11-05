@@ -1,5 +1,6 @@
 #%%
 from source.utils import get_sequence, DatasetConverter
+from source.utils import CrossEntropyL1Loss, MSEL1Loss
 from source.model.memory import Memory
 from source.model.prediction import Prediction
 from source.model.helpers import train_memory_layer,\
@@ -17,23 +18,24 @@ from collections import deque
 #%%
 def main():
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 500000, 2, 5
+    total_samples, n_community, n_members = 5000000, 2, 14
     total_layers, short_term_memory = 3, 3
 
     vocab_size = n_community * n_members + 1
-    hidden_size_memory = [40, 100, 300, 1000][:total_layers]
-    emb_dim_l0 = 20
+    hidden_size_memory = [60, 180, 540, 1000][:total_layers]
+    emb_dim_l0 = 30
 
     # Explicit per-layer hidden sizes for prediction heads
     pred_hidden_sizes = hidden_size_memory #[60, 180, 540][:total_layers]  
 
     lr_memory = [1e-3] + [1e-3] * (total_layers - 1)
-    grad_eps = [1e-3, 2e-2, 1e-1]
+    grad_eps = [1e-3, 1e-1, 2e-1, 2e-1]
     pred_eps = 5e-2
     lr_prediction = 4e-4
     ema_alpha = 0.3
+    sparsity_lamda = 0
     sleep_interval_wake = 30000
-    sleep_steps_per_L = {1:10000, 2:1000} #{l: 1000 for l in range(1, total_layers)}
+    sleep_steps_per_L = {1:10000, 2:1000, 3:1000} #{l: 1000 for l in range(1, total_layers)}
 
     # ---- per-layer wake-time strides ----
     # layer_strides[L] applies to updating h_states[L] from h_states[L-1] during WAKE.
@@ -137,7 +139,14 @@ def main():
                 print("Entering sleep ...")
                 for l in range(1, total_layers):
                     print("Training Layer ", l)
-                    sleep_train_layer(l, sleep_steps_per_L[l], short_term_memory, mem_blocks, mem_opts, mem_criteria, pred_blocks, sigma=0.0, ema_alpha=ema_alpha, eps=grad_eps[l])
+                    if l == 2 and total<sleep_interval_wake*5:
+                        print("Layer ", l," not trained")
+                        continue
+                    elif l == 3 and total<sleep_interval_wake*10:
+                        print("Layer ", l," not trained")
+                        continue
+
+                    sleep_train_layer(l, sleep_steps_per_L[l], short_term_memory, mem_blocks, mem_opts, mem_criteria, pred_blocks, sigma=0.5, ema_alpha=ema_alpha, eps=grad_eps[l])
 
 
 
