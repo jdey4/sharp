@@ -70,7 +70,7 @@ class Prediction(nn.Module):
             if context is None:
                 context = torch.zeros(h.size(0), h.size(1), self.context_size,
                                       device=h.device, dtype=h.dtype)
-            x_in = torch.cat((h, context), dim=2)
+            x_in = torch.cat((h, F.relu(context)), dim=2)
         else:
             x_in = h
         x = F.relu(self.l1(x_in))

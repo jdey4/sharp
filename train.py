@@ -18,23 +18,23 @@ from collections import deque
 #%%
 def main():
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 5000000, 2, 17
-    total_layers, short_term_memory = 3, 3
+    total_samples, n_community, n_members = 5000000, 2, 30
+    total_layers, short_term_memory = 4, 3
 
     vocab_size = n_community * n_members + 1
-    hidden_size_memory = [60, 180, 540, 1000][:total_layers]
+    hidden_size_memory = [60, 180, 540, 1620][:total_layers]
     emb_dim_l0 = 30
 
     # Explicit per-layer hidden sizes for prediction heads
     pred_hidden_sizes = hidden_size_memory #[60, 180, 540][:total_layers]  
 
     lr_memory = [1e-3] + [1e-3] * (total_layers - 1)
-    grad_eps = [1e-3, 1e-1, 1e-1, 2e-1]
+    grad_eps = [1e-3, 1e-1, 1e-1, 1e-1]
     pred_eps = 1e-2
     lr_prediction = 4e-4
     ema_alpha = 0.3
     sleep_interval_wake = 30000
-    sleep_steps_per_L = {1:10000, 2:1000, 3:1000} #{l: 1000 for l in range(1, total_layers)}
+    sleep_steps_per_L = {1:10000, 2:10000, 3:10000} #{l: 1000 for l in range(1, total_layers)}
 
     # ---- per-layer wake-time strides ----
     # layer_strides[L] applies to updating h_states[L] from h_states[L-1] during WAKE.
@@ -70,7 +70,7 @@ def main():
 
     #print(mem_blocks, pred_blocks)
     # ---- Data ----
-    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)
+    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/(n_members/10.0))
     dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -123,7 +123,7 @@ def main():
 
         logits, loss = train_pattern_recognition(
                                     pred_blocks, pred_opt, pred_criteria, 
-                                    h_states, h_targets, alpha=1e-1, eps=pred_eps
+                                    h_states, h_targets, alpha=1.0, eps=pred_eps
                                 )
             
         
