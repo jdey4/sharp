@@ -75,3 +75,80 @@ class Prediction(nn.Module):
             x_in = h
         x = F.relu(self.l1(x_in))
         return self.l2(x)
+
+
+class PredictionFiLM(nn.Module):
+    """
+    FiLM-modulated prediction (readout) head for hierarchical RNN memory layers.
+
+    Each `PredictionFiLM` block takes a hidden representation from a memory layer
+    and modulates it feature-wise using context γ(c), β(c) before decoding.
+    This allows the same weights to adapt their behavior smoothly to different
+    higher-layer contexts.
+
+    Args:
+        input_size (int): Dimensionality of the hidden representation from
+            the current layer (input feature dimension).
+        hidden_size (int): Size of the intermediate hidden layer.
+        output_size (int): Dimensionality of the prediction output.
+        context_size (int, optional): Size of contextual vector from a higher layer.
+            If 0, the FiLM path is disabled.
+
+    Attributes:
+        film (nn.Linear): Projects context → [γ, β] modulation parameters.
+        l1 (nn.Linear): Base transformation after modulation.
+        l2 (nn.Linear): Output projection to prediction dimension.
+
+    Forward:
+        forward(h, context=None)
+            h: (B, T, input_size)
+            context: (B, T, context_size) or None
+        Returns:
+            Tensor (B, T, output_size)
+    """
+    def __init__(self, input_size, hidden_size, output_size, context_size=0):
+        super().__init__()
+        self.context_size = context_size
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+
+        # Base linear layers
+        self.l1 = nn.Linear(input_size, hidden_size)
+        self.l2 = nn.Linear(hidden_size, output_size)
+
+        # FiLM modulation network (produces gamma, beta)
+        if context_size > 0:
+            self.film = nn.Sequential(
+                nn.Linear(context_size, 2 * input_size),
+                nn.LayerNorm(2 * input_size)
+            )
+        else:
+            self.film = None
+
+        self.norm = nn.LayerNorm(input_size)
+
+    def forward(self, h, context=None):
+        """
+        h: (B, T, input_size)
+        context: (B, T, context_size) or None
+        """
+        # LayerNorm keeps feature scales stable before modulation
+        h = self.norm(h)
+
+        if self.context_size > 0:
+            if context is None:
+                # fall back to zero context
+                context = torch.zeros(
+                    h.size(0), h.size(1), self.context_size,
+                    device=h.device, dtype=h.dtype
+                )
+            # Compute FiLM parameters
+            gamma, beta = self.film(context).chunk(2, dim=-1)
+            # Apply modulation
+            h = gamma * F.gelu(h) + beta
+
+        # Decode through nonlinear readout
+        x = self.l1(F.gelu(h))
+        y = self.l2(F.gelu(x))
+        
+        return y

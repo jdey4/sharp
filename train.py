@@ -1,8 +1,8 @@
 #%%
 from source.utils import get_sequence, DatasetConverter
 from source.utils import CrossEntropyL1Loss, MSEL1Loss
-from source.model.memory import Memory
-from source.model.prediction import Prediction
+from source.model.memory import Memory, MemoryVAE
+from source.model.prediction import Prediction, PredictionFiLM
 from source.model.helpers import train_memory_layer,\
     sleep_train_layer, train_pattern_recognition
 
@@ -17,8 +17,13 @@ from collections import deque
 
 #%%
 def main():
+    # Use Apple Silicon GPU (Metal Performance Shaders)
+    device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+    print("Using device:", device)
+
     # ---- Parameters (your style) ----
-    total_samples, n_community, n_members = 5000000, 2, 30
+    total_samples, n_community, n_members = 10000000, 2, 18
     total_layers, short_term_memory = 4, 3
 
     vocab_size = n_community * n_members + 1
@@ -29,12 +34,12 @@ def main():
     pred_hidden_sizes = hidden_size_memory #[60, 180, 540][:total_layers]  
 
     lr_memory = [1e-3] + [1e-3] * (total_layers - 1)
-    grad_eps = [1e-3, 1e-1, 1e-1, 1e-1]
-    pred_eps = 1e-2
+    grad_eps = [1e-3, 1e-3, 1e-3, 1e-3]
+    pred_eps = 1e-4
     lr_prediction = 4e-4
     ema_alpha = 0.3
-    sleep_interval_wake = 30000
-    sleep_steps_per_L = {1:10000, 2:10000, 3:10000} #{l: 1000 for l in range(1, total_layers)}
+    sleep_interval_wake = 1000
+    sleep_steps_per_L = {1:100, 2:100, 3:100} #{l: 1000 for l in range(1, total_layers)}
 
     # ---- per-layer wake-time strides ----
     # layer_strides[L] applies to updating h_states[L] from h_states[L-1] during WAKE.
@@ -48,10 +53,10 @@ def main():
     mem_blocks, mem_criteria, mem_opts = {}, [], []
     for l in range(total_layers):
         if l == 0:
-            mem_blocks[l] = Memory(vocab_size, hidden_size_memory[l], embedding_dim=emb_dim_l0, layer=0)
+            mem_blocks[l] = Memory(vocab_size, hidden_size_memory[l], embedding_dim=emb_dim_l0, layer=0).to(device)
             mem_criteria.append(nn.CrossEntropyLoss())
         else:
-            mem_blocks[l] = Memory(hidden_size_memory[l - 1], hidden_size_memory[l], layer=l)
+            mem_blocks[l] = Memory(hidden_size_memory[l - 1], hidden_size_memory[l], layer=l).to(device)
             mem_criteria.append(nn.MSELoss())
         mem_opts.append(torch.optim.Adam(mem_blocks[l].parameters(), lr=lr_memory[l], weight_decay=1e-8))
 
@@ -60,7 +65,7 @@ def main():
     for l in range(total_layers):
         ctx_size = hidden_size_memory[l] if (l + 1) < total_layers else 0
         out_size = vocab_size if l == 0 else hidden_size_memory[l - 1]
-        pred_blocks[l] = Prediction(hidden_size_memory[l], pred_hidden_sizes[l], out_size, ctx_size)
+        pred_blocks[l] = PredictionFiLM(hidden_size_memory[l], pred_hidden_sizes[l], out_size, ctx_size).to(device)
         pred_criteria.append(
             nn.CrossEntropyLoss() if l==0 else nn.MSELoss()
         )
@@ -70,7 +75,7 @@ def main():
 
     #print(mem_blocks, pred_blocks)
     # ---- Data ----
-    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/(n_members/10.0))
+    data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)#/(n_members/10.0))
     dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -80,9 +85,9 @@ def main():
     h_ema = {}
 
     for ii in range(total_layers):
-        h_states[ii] = torch.zeros(1, 1, hidden_size_memory[ii])
-        h_targets[ii] = torch.zeros(1, 1, hidden_size_memory[ii-1]) if ii>0 else torch.zeros(1, 1)
-        h_ema[ii] = torch.zeros(1, 1, hidden_size_memory[ii])
+        h_states[ii] = torch.zeros(1, 1, hidden_size_memory[ii]).to(device)
+        h_targets[ii] = torch.zeros(1, 1, hidden_size_memory[ii-1]).to(device) if ii>0 else torch.zeros(1, 1)
+        h_ema[ii] = torch.zeros(1, 1, hidden_size_memory[ii]).to(device)
     
 
     ########### Train ###############
@@ -90,6 +95,9 @@ def main():
     total = 0
 
     for X, y in loader:
+        X = X.to(device)
+        y = y.to(device)
+
         # L0 AE always trains on the current short sequence X
         l0_ae_loss = train_memory_layer(mem_blocks[0], mem_opts[0], mem_criteria[0], X, layer=0, eps=grad_eps[0])
         # Update L0 hidden from the current sequence
@@ -140,14 +148,14 @@ def main():
                 print("Entering sleep ...")
                 for l in range(1, total_layers):
                     print("Training Layer ", l)
-                    if l == 2 and total<sleep_interval_wake*5:
+                    if l == 2 and total<sleep_interval_wake*1:
                         print("Layer ", l," not trained")
                         continue
-                    elif l == 3 and total<sleep_interval_wake*10:
+                    elif l == 3 and total<sleep_interval_wake*1:
                         print("Layer ", l," not trained")
                         continue
 
-                    sleep_train_layer(l, sleep_steps_per_L[l], short_term_memory, mem_blocks, mem_opts, mem_criteria, pred_blocks, sigma=0.5, ema_alpha=ema_alpha, eps=grad_eps[l])
+                    sleep_train_layer(l, sleep_steps_per_L[l], short_term_memory, mem_blocks, mem_opts, mem_criteria, pred_blocks, sigma=0.0, ema_alpha=ema_alpha, eps=grad_eps[l])
 
 
 
