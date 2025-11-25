@@ -1,5 +1,5 @@
 from .memory import *
-from .model import *
+from .layer import *
 from .prediction import *
 from .helpers import *
 

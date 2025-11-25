@@ -373,9 +373,8 @@ def sleep_train_layer(
             window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
             mem_loss = train_memory_layer(upper_mb, upper_opt, upper_crit, window, layer=target_layer, eps=eps)
 
-    
+
     print('Sleeping memory loss ', mem_loss)
     # Unfreeze lower layers
     unfreeze_range(mem_blocks, source_layer, source_layer)
     unfreeze_range(pred_blocks, source_layer, source_layer)
-

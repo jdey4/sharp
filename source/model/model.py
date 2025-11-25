@@ -1,78 +1,138 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from .prediction import PredictionFiLM
-from .memory import MemoryVAE
+from torch import optim
+from .layer import Layer  
+from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss
 
-class Layer(nn.Module):
-    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, context_size=0, tau=0.5):
+
+
+class Model(nn.Module):
+    """
+    Hierarchical predictive + memory model.
+    Fully kwargs-driven: ANY hyperparameter can be passed at init.
+    """
+
+    def __init__(self, **kwargs):
         super().__init__()
-        self.layer = layer
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.context_size = context_size
 
-        self.memory = MemoryVAE(
-            self.input_size, self.hidden_size, embedding_dim=embedding_dim, 
-            layer=self.layer, tau=tau
+        # ============================================================
+        # 1. DEFAULT SETTINGS
+        # ============================================================
+        defaults = dict(
+            total_layers = 3,
+            vocab_size = None,
+            hidden_sizes = None,
+            embedding_dim_l0 = None,
+            short_term_memory = 3,
+            tau = 0.5,
+
+            # learning
+            lr_layers = None,            # list of per-layer LRs
+            optimizer_class = optim.Adam,
+            optimizer_kwargs = None,     # dict: lr, betas, weight_decay, etc.
+
+            # sleep dynamics
+            ema_alpha = 0.3,
+            sleep_interval = 1000,
+            sleep_steps = None,          # dict {layer: steps}
+
+            # misc
+            device = "cpu",
         )
-        self.prediction = PredictionFiLM(
-            self.hidden_size, self.input_size,
-            context_size=self.context_size
-        )
 
-    def forward(self, x, h0=None, context=None):
-        logits_reconstruction, mu, logvar = self.memory(x, h0)   # mu: (B,H)
-        mu_seq = mu.unsqueeze(1)                                 # (B,1,H)
-        logits_prediction = self.prediction(mu_seq, context)
-        return logits_reconstruction, logits_prediction, mu, logvar
-    
-    @torch.no_grad()
-    def generate_sample(self, x=None, h0=None, temperature=1.0):
-        """
-        One generative step:
-          - Layer 0: sample next token from softmax(prediction(mu))
-          - Higher layers: generate next continuous vector from prediction(mu)
+        # ============================================================
+        # 2. MERGE DEFAULTS WITH USER KWARGS
+        # ============================================================
+        for k,v in {**defaults, **kwargs}.items():
+            setattr(self, k, v)
 
-        Returns:
-            x_next : (1,1) token id (layer 0) or (1,1,input_size) vector (higher layers)
-            mu     : (1,1,hidden_size)  place-cell-like code for this step
-            h_next : (1,1,hidden_size)  updated memory hidden state
-        """
-        device = next(self.parameters()).device
+        self.device = torch.device(self.device)
 
-        # ---------------- LAYER 0: TOKEN GENERATION ----------------
-        if self.layer == 0:
-            # x is a token id
-            if x is None:
-                x = torch.randint(0, self.input_size, (1,1), device=device)  
-            
+        # Default optimizer settings per layer
+        if self.optimizer_kwargs is None:
+            self.optimizer_kwargs = {"lr": 1e-3, "weight_decay": 1e-8}
 
-            # encode step: get mu_seq (1,1,H) and next hidden (1,1,H)
-            mu_seq, h_next = self.memory.encode_step_from_token(x, h0)
+        # ============================================================
+        # 3. VALIDITY CHECKS
+        # ============================================================
+        assert self.vocab_size is not None
+        assert self.hidden_sizes is not None
+        assert self.embedding_dim_l0 is not None
+        assert self.lr_layers is not None
+        assert len(self.hidden_sizes) == self.total_layers
+        assert len(self.lr_layers) == self.total_layers
 
-            # context-free prediction over vocab, shape (1,1,vocab)
-            logits = self.prediction(mu_seq)
+        if self.sleep_steps is None:
+            self.sleep_steps = {l: 100 for l in range(1, self.total_layers)}
 
-            # sample token from softmax
-            logits_flat = logits[:, 0, :] / temperature   # (1,vocab)
-            probs = torch.softmax(logits_flat, dim=-1)
-            x_next = torch.multinomial(probs, num_samples=1)  # (1,1)
+        # ============================================================
+        # 4. BUILD LAYERS — WITH LOSS + OPTIMIZER PER LAYER
+        # ============================================================
+        self.layers = nn.ModuleList()
 
-            return x_next, mu_seq, h_next
+        for l in range(self.total_layers):
 
-        # --------------- HIGHER LAYERS: CONTINUOUS -----------------
-        else:
-            if x is None:
-                x = torch.zeros((1, 1, self.input_size), device=device)
+            # input + context sizes
+            if l == 0:
+                inp = self.vocab_size
+                ctx = self.hidden_sizes[l+1] if self.total_layers > 1 else 0
+                emb = self.embedding_dim_l0
             else:
-                x = x.to(device)
-                if x.dim() == 2:
-                    x = x.unsqueeze(1)   # (1,1,input_size)
+                inp = self.hidden_sizes[l-1]
+                ctx = self.hidden_sizes[l+1] if (l+1 < self.total_layers) else 0
+                emb = None
 
-            mu_seq, h_next = self.memory.encode_step_from_vec(x, h0)  # (1,1,H)
+            # --------------------------
+            # Choose loss for this layer
+            # --------------------------
+            if l == 0:
+                loss_fn = CrossEntropyLayerLoss()
+            else:
+                loss_fn = MSELayerLoss()
 
-            # prediction gives next continuous state/vector
-            x_next = self.prediction(mu_seq)         # (1,1,input_size)
+            # Use layer-specific LR
+            local_opt_kwargs = dict(self.optimizer_kwargs)
+            local_opt_kwargs["lr"] = self.lr_layers[l]
 
-            return x_next, mu_seq, h_next
+            # Build layer WITH internal optimizer
+            self.layers.append(
+                Layer(
+                    input_size=inp,
+                    hidden_size=self.hidden_sizes[l],
+                    loss_function=loss_fn,
+                    optimizer_class=self.optimizer_class,
+                    optimizer_kwargs=local_opt_kwargs,
+                    embedding_dim=emb,
+                    layer=l,
+                    context_size=ctx,
+                    tau=self.tau
+                ).to(self.device)
+            )
+
+        # ============================================================
+        # 5. HIDDEN STATES, TARGETS, EMA BUFFERS
+        # ============================================================
+        self.h_states = {}
+        self.h_targets = {}
+        self.h_ema = {}
+
+        for l in range(self.total_layers):
+            H = self.hidden_sizes[l]
+            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+            self.h_ema[l] = torch.zeros(1, 1, H, device=self.device)
+
+            if l == 0:
+                self.h_targets[l] = torch.zeros(1, 1, device=self.device)
+            else:
+                self.h_targets[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
+
+    # ===================================================================
+    def summary(self):
+        print("\n===== Model Summary =====")
+        print(f"Total layers: {self.total_layers}")
+        print(f"Hidden sizes: {self.hidden_sizes}")
+        print(f"Sleep interval: {self.sleep_interval}")
+        print(f"Sleep steps: {self.sleep_steps}")
+        print(f"EMA alpha: {self.ema_alpha}")
+        print(f"Device: {self.device}")
+        print("=================================\n")
