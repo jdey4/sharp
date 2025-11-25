@@ -139,105 +139,161 @@ class Memory(nn.Module):
 
 class MemoryVAE(nn.Module):
     """
-    Variational Autoencoder-style recurrent memory block.
+    Variational Autoencoder-style recurrent memory module.
 
-    Differs from the deterministic `Memory` block by learning a distribution
-    over hidden states: q(z|x) = N(mu, sigma).  The latent z is sampled via
-    the reparameterization trick and used as the memory representation.
+    q(z | x) = N(mu, sigma^2), with:
+      - LayerNorm on mu
+      - hard thresholded ReLU on mu (mu > tau -> keep, else 0)
+      - z sparsified using the same mu mask
 
-    During training, add a KL-divergence term to the reconstruction loss:
+    During training, add a KL term:
         KL = -0.5 * sum(1 + logvar - mu^2 - exp(logvar))
     """
 
-    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0):
+    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, tau=0.1):
         super().__init__()
         self.layer = layer
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.tau = tau
 
-        # ----- Encoder -----
+        # ------------------------------------------------------
+        #                    Encoder
+        # ------------------------------------------------------
         if layer == 0:
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
             enc_in = embedding_dim
         else:
             enc_in = input_size
+
         self.encoder = nn.RNN(enc_in, hidden_size, batch_first=True)
 
-        # heads for variational parameters
+        # variational heads
         self.fc_mu = nn.Linear(hidden_size, hidden_size)
         self.fc_logvar = nn.Linear(hidden_size, hidden_size)
 
-        # ----- Decoder -----
-        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
-        self.out = nn.Linear(hidden_size, input_size)
+        # homeostatic normalization of mu
+        self.mu_norm = nn.LayerNorm(hidden_size)
 
-        # initialization
+        # ------------------------------------------------------
+        #                    Decoder
+        # ------------------------------------------------------
+        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
+        self.reconstruction_out = nn.Linear(hidden_size, input_size)
+
+        # ------------------------------------------------------
+        #                   Initialization
+        # ------------------------------------------------------
         for name, p in self.encoder.named_parameters():
-            if "weight_hh" in name: nn.init.orthogonal_(p)
-            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-            elif "bias" in name: nn.init.zeros_(p)
+            if "weight_hh" in name:
+                nn.init.orthogonal_(p)
+            elif "weight_ih" in name:
+                nn.init.xavier_uniform_(p)
+            elif "bias" in name:
+                nn.init.zeros_(p)
+
         for name, p in self.decoder.named_parameters():
-            if "weight_hh" in name: nn.init.orthogonal_(p)
-            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-            elif "bias" in name: nn.init.zeros_(p)
+            if "weight_hh" in name:
+                nn.init.orthogonal_(p)
+            elif "weight_ih" in name:
+                nn.init.xavier_uniform_(p)
+            elif "bias" in name:
+                nn.init.zeros_(p)
+
         nn.init.xavier_uniform_(self.fc_mu.weight)
         nn.init.xavier_uniform_(self.fc_logvar.weight)
 
-    # --------------------------------------------------------------
+    # ----------------------------------------------------------
+    def threshold(self, mu):
+        """
+        Hard thresholded ReLU:
+            y_i = mu_i if mu_i > tau else 0
+        This is effectively a ReLU with threshold tau.
+        """
+        return mu * (mu > self.tau)
 
+    # --------------------------------------------------------------
     def reparameterize(self, mu, logvar):
-        """Sample z ~ N(mu, sigma^2) using the reparameterization trick."""
+        """Sample z ~ N(mu, sigma^2) then sparsify using mu mask."""
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        return mu + eps * std
+        z = mu + eps * std
+        z_sparse = z * (mu > self.tau)  # gate z with same support as mu
+        return z_sparse
 
+    # --------------------------------------------------------------
     def forward(self, x, h0=None):
-        # ----- Encode -----
-        if self.layer == 0:
-            if x.dtype in (torch.int64, torch.int32):
-                x = self.embedding(x)
-        _, h_enc = self.encoder(x, h0)              # (1,B,H)
-        h_enc = h_enc.squeeze(0)                    # (B,H)
+        """
+        Returns:
+            logits  : (B, T, input_size)
+            mu      : (B, H)  AFTER norm + threshold
+            logvar  : (B, H)
+        """
+        # ----- Embedding (Layer 0 only) -----
+        if self.layer == 0 and x.dtype in (torch.int64, torch.int32):
+            x = self.embedding(x)
 
-        # mean and logvar of latent distribution
+        # ----- Encode sequence → (B, H) -----
+        _, h_enc = self.encoder(x, h0)   # h_enc: (1,B,H)
+        h_enc = h_enc.squeeze(0)
+
+        # μ, logσ²
         mu = self.fc_mu(h_enc)
-        logvar = self.fc_logvar(h_enc)
-        z = self.reparameterize(mu, logvar)         # (B,H)
-        h = z.unsqueeze(0)                          # (1,B,H) for RNN interface
+        mu = self.mu_norm(mu)       # LayerNorm
+        mu = self.threshold(mu)     # thresholded ReLU
 
-        # ----- Decode -----
+        logvar = self.fc_logvar(h_enc)
+
+        # latent z (sparse)
+        z = self.reparameterize(mu, logvar)  # (B,H)
+        h = z.unsqueeze(0)                   # (1,B,H) for decoder
+
+        # ----- Decode autoregressively -----
         B, T = x.shape[0], x.shape[1]
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device)
-        outs, h_dec = [], h
+
+        outs = []
+        h_dec = h
         for _ in range(T):
             d, h_dec = self.decoder(dec_in, h_dec)
-            logits = self.out(d)
+            logits = self.reconstruction_out(d)
             outs.append(logits)
             dec_in = logits.detach()
 
         logits = torch.cat(outs, dim=1)
-        return logits, h#, mu, logvar
+        return logits, mu, logvar
 
     # --------------------------------------------------------------
-
+    #     Optional incremental encode helpers
+    # --------------------------------------------------------------
     def encode_step_from_token(self, token_id, h_prev):
-        """Single-step encode for discrete input (layer 0 only)."""
-        assert self.layer == 0, "encode_step_from_token only for layer 0"
-        emb = self.embedding(token_id.view(1, 1))
-        _, h_next = self.encoder(emb, h_prev)
-        mu = self.fc_mu(h_next.squeeze(0))
-        logvar = self.fc_logvar(h_next.squeeze(0))
-        z = self.reparameterize(mu, logvar)
-        return z.unsqueeze(0)
+        """Single-step encode for discrete token (layer 0)."""
+        assert self.layer == 0
+        emb = self.embedding(token_id.view(1, 1))   # (1,1,E)
+        _, h_next = self.encoder(emb, h_prev)       # h_next: (1,1,H)
+
+        h_vec = h_next.squeeze(0)                   # (1,H)
+        mu = self.fc_mu(h_vec)
+        mu = self.mu_norm(mu)
+        mu = self.threshold(mu)                     # (1,H)
+
+        # For prediction: (B,T,H) = (1,1,H)
+        mu_seq = mu.unsqueeze(1)                    # (1,1,H)
+
+        # For RNN: keep hidden as (1,B,H) = (1,1,H)
+        return mu_seq, h_next
 
     def encode_step_from_vec(self, x_vec, h_prev):
-        """Single-step encode for continuous input vector."""
-        _, h_next = self.encoder(x_vec, h_prev)
-        mu = self.fc_mu(h_next.squeeze(0))
-        logvar = self.fc_logvar(h_next.squeeze(0))
-        z = self.reparameterize(mu, logvar)
-        return z.unsqueeze(0)
+        """Single-step encode for continuous vector input."""
+        # x_vec: (1,1,input_size)
+        _, h_next = self.encoder(x_vec, h_prev)     # (1,1,H)
 
+        h_vec = h_next.squeeze(0)                   # (1,H)
+        mu = self.fc_mu(h_vec)
+        mu = self.mu_norm(mu)
+        mu = self.threshold(mu)
 
+        mu_seq = mu.unsqueeze(1)                    # (1,1,H)
 
+        return mu_seq, h_next

@@ -106,15 +106,14 @@ class PredictionFiLM(nn.Module):
         Returns:
             Tensor (B, T, output_size)
     """
-    def __init__(self, input_size, hidden_size, output_size, context_size=0):
+    def __init__(self, input_size, output_size, context_size=0):
         super().__init__()
         self.context_size = context_size
         self.input_size = input_size
-        self.hidden_size = hidden_size
 
         # Base linear layers
-        self.l1 = nn.Linear(input_size, hidden_size)
-        self.l2 = nn.Linear(hidden_size, output_size)
+        self.l1 = nn.Linear(input_size, output_size)
+        #self.l2 = nn.Linear(hidden_size, output_size)
 
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
@@ -132,8 +131,6 @@ class PredictionFiLM(nn.Module):
         h: (B, T, input_size)
         context: (B, T, context_size) or None
         """
-        # LayerNorm keeps feature scales stable before modulation
-        h = self.norm(h)
 
         if self.context_size > 0:
             if context is None:
@@ -149,6 +146,6 @@ class PredictionFiLM(nn.Module):
 
         # Decode through nonlinear readout
         x = self.l1(F.gelu(h))
-        y = self.l2(F.gelu(x))
+        #y = self.l2(F.gelu(x))
         
-        return y
+        return x
