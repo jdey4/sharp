@@ -53,10 +53,10 @@ class Layer(nn.Module):
         self.optimizer = optimizer_class(all_params, **optimizer_kwargs)
 
     def forward(self, x, h0=None, context=None):
-        logits_reconstruction, mu, logvar = self.memory(x, h0)   # mu: (B,H)
-        mu_seq = mu.unsqueeze(1)                                 # (B,1,H)
-        logits_prediction = self.prediction(mu_seq, context)
-        return logits_reconstruction, logits_prediction, mu, logvar
+        logits_reconstruction, z, logvar = self.memory(x, h0)   # mu: (B,H)
+        z_seq = z.unsqueeze(1)                                 # (B,1,H)
+        logits_prediction = self.prediction(z_seq, context)
+        return logits_reconstruction, logits_prediction, z, logvar
     
     @torch.no_grad()
     def generate_sample(self, x=None, h0=None, temperature=1.0):
@@ -80,17 +80,17 @@ class Layer(nn.Module):
             
 
             # encode step: get mu_seq (1,1,H) and next hidden (1,1,H)
-            mu_seq, h_next = self.memory.encode_step_from_token(x, h0)
+            z_seq, h_next = self.memory.encode_step_from_token(x, h0)
 
             # context-free prediction over vocab, shape (1,1,vocab)
-            logits = self.prediction(mu_seq)
+            logits = self.prediction(z_seq)
 
             # sample token from softmax
             logits_flat = logits[:, 0, :] / temperature   # (1,vocab)
             probs = torch.softmax(logits_flat, dim=-1)
             x_next = torch.multinomial(probs, num_samples=1)  # (1,1)
 
-            return x_next, mu_seq, h_next
+            return x_next, z_seq, h_next
 
         # --------------- HIGHER LAYERS: CONTINUOUS -----------------
         else:
@@ -101,15 +101,15 @@ class Layer(nn.Module):
                 if x.dim() == 2:
                     x = x.unsqueeze(1)   # (1,1,input_size)
 
-            mu_seq, h_next = self.memory.encode_step_from_vec(x, h0)  # (1,1,H)
+            z_seq, h_next = self.memory.encode_step_from_vec(x, h0)  # (1,1,H)
 
             # prediction gives next continuous state/vector
-            x_next = self.prediction(mu_seq)         # (1,1,input_size)
+            x_next = self.prediction(z_seq)         # (1,1,input_size)
 
-            return x_next, mu_seq, h_next
+            return x_next, z_seq, h_next
         
-    def train_step(self, x, y, h0=None, context=None):
-        logits_rec, logits_pred, mu, logvar = self.forward(x, h0, context)
+    def train_step(self, x, y, h0=None, context=None, threshold=1e-5):
+        logits_rec, logits_pred, z, logvar = self.forward(x, h0, context)
 
         # layer-specific loss
         loss = self.loss(
@@ -118,8 +118,9 @@ class Layer(nn.Module):
         )
 
         # backprop
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+        if loss > threshold:
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
 
-        return loss.item(), logits_rec, logits_pred, mu, logvar
+        return loss.item(), logits_rec, logits_pred, z, logvar

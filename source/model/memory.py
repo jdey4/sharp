@@ -262,38 +262,49 @@ class MemoryVAE(nn.Module):
             dec_in = logits.detach()
 
         logits = torch.cat(outs, dim=1)
-        return logits, mu, logvar
+        return logits, z, logvar
 
     # --------------------------------------------------------------
     #     Optional incremental encode helpers
     # --------------------------------------------------------------
+    @torch.no_grad()
     def encode_step_from_token(self, token_id, h_prev):
-        """Single-step encode for discrete token (layer 0)."""
+        """Single-step encode for discrete token (layer 0). Return sampled z."""
         assert self.layer == 0
-        emb = self.embedding(token_id.view(1, 1))   # (1,1,E)
-        _, h_next = self.encoder(emb, h_prev)       # h_next: (1,1,H)
 
-        h_vec = h_next.squeeze(0)                   # (1,H)
-        mu = self.fc_mu(h_vec)
-        mu = self.mu_norm(mu)
-        mu = self.threshold(mu)                     # (1,H)
+        # ---- Encode token ----
+        emb = self.embedding(token_id.view(1, 1))     # (1,1,E)
+        _, h_next = self.encoder(emb, h_prev)         # (1,1,H)
 
-        # For prediction: (B,T,H) = (1,1,H)
-        mu_seq = mu.unsqueeze(1)                    # (1,1,H)
+        # ---- Compute mu, logvar ----
+        h_vec = h_next.squeeze(0)                     # (1,H)
+        mu = self.threshold(self.mu_norm(self.fc_mu(h_vec)))
+        logvar = self.fc_logvar(h_vec)
 
-        # For RNN: keep hidden as (1,B,H) = (1,1,H)
-        return mu_seq, h_next
+        # ---- SAMPLE z using existing reparameterize() ----
+        z = self.reparameterize(mu, logvar)           # (1,H)
 
+        # reshape for FiLM prediction
+        z_seq = z.unsqueeze(1)                        # (1,1,H)
+
+        return z_seq, h_next
+
+
+    @torch.no_grad()
     def encode_step_from_vec(self, x_vec, h_prev):
-        """Single-step encode for continuous vector input."""
-        # x_vec: (1,1,input_size)
-        _, h_next = self.encoder(x_vec, h_prev)     # (1,1,H)
+        """Single-step encode for continuous vector input. Return sampled z."""
+        # ---- Encode ----
+        _, h_next = self.encoder(x_vec, h_prev)       # (1,1,H)
 
-        h_vec = h_next.squeeze(0)                   # (1,H)
-        mu = self.fc_mu(h_vec)
-        mu = self.mu_norm(mu)
-        mu = self.threshold(mu)
+        # ---- Compute mu, logvar ----
+        h_vec = h_next.squeeze(0)                     # (1,H)
+        mu = self.threshold(self.mu_norm(self.fc_mu(h_vec)))
+        logvar = self.fc_logvar(h_vec)
 
-        mu_seq = mu.unsqueeze(1)                    # (1,1,H)
+        # ---- SAMPLE z ----
+        z = self.reparameterize(mu, logvar)
 
-        return mu_seq, h_next
+        # reshape
+        z_seq = z.unsqueeze(1)                        # (1,1,H)
+
+        return z_seq, h_next
