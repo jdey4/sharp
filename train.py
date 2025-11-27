@@ -21,7 +21,7 @@ def main():
 
     # ---- Parameters (your style) ----
     total_samples, n_community, n_members = 100000, 2, 3
-    total_layers, short_term_memory = 4, 3
+    total_layers, short_term_memory = 3, 3
 
     vocab_size = n_community * n_members + 1
 
@@ -36,7 +36,7 @@ def main():
     # Build a 3-layer hierarchical predictive + memory model
     # ============================================================
     model = Model(
-        total_layers = 3,
+        total_layers = total_layers,
 
         # ---- Layer sizes ----
         vocab_size = vocab_size,                  # layer 0 input dimension
@@ -88,7 +88,7 @@ print("Using device:", device)
 
 # ---- Parameters (your style) ----
 total_samples, n_community, n_members = 100000, 2, 3
-total_layers, short_term_memory = 4, 3
+total_layers, short_term_memory = 3, 3
 
 vocab_size = n_community * n_members + 1
 
@@ -103,7 +103,7 @@ loader = DataLoader(dataset, batch_size=1, shuffle=False)
 # Build a 3-layer hierarchical predictive + memory model
 # ============================================================
 model = Model(
-    total_layers = 3,
+    total_layers = total_layers,
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
