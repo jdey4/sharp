@@ -60,15 +60,15 @@ class Layer(nn.Module):
     
     @torch.no_grad()
     def generate_sample(self, x=None, h0=None, temperature=1.0):
-        """
-        One generative step:
-          - Layer 0: sample next token from softmax(prediction(mu))
-          - Higher layers: generate next continuous vector from prediction(mu)
+        r"""
+            One generative step:
+            - Layer 0: sample next token from softmax(prediction(mu))
+            - Higher layers: generate next continuous vector from prediction(mu)
 
-        Returns:
-            x_next : (1,1) token id (layer 0) or (1,1,input_size) vector (higher layers)
-            mu     : (1,1,hidden_size)  place-cell-like code for this step
-            h_next : (1,1,hidden_size)  updated memory hidden state
+            Returns:
+                x_next : (1,1) token id (layer 0) or (1,1,input_size) vector (higher layers)
+                mu     : (1,1,hidden_size)  place-cell-like code for this step
+                h_next : (1,1,hidden_size)  updated memory hidden state
         """
         device = next(self.parameters()).device
 

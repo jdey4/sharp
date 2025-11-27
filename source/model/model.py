@@ -8,8 +8,8 @@ from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss
 
 class Model(nn.Module):
     """
-    Hierarchical predictive + memory model.
-    Fully kwargs-driven: ANY hyperparameter can be passed at init.
+        Hierarchical predictive + memory model.
+        Fully kwargs-driven: ANY hyperparameter can be passed at init.
     """
 
     def __init__(self, **kwargs):
