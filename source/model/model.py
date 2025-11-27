@@ -128,7 +128,7 @@ class Model(nn.Module):
                 self.last_pred[l] = torch.zeros(1, 1, self.vocab_size, device=self.device)
             else:
                 self.z_targets[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
-                self.last_pred[l] = torch.zeros(1, 1, H).to(self.device)
+                self.last_pred[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
 
 
 
