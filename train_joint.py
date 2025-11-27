@@ -60,7 +60,7 @@ def main():
         sleep_steps = {1: 100, 2: 100},   # layer 2 is the top
 
         # ---- Misc ----
-        tau = 0.5,
+        tau = 0.6,
         device = device
     )
 
@@ -127,7 +127,7 @@ model = Model(
     sleep_steps = {1: 100, 2: 100},   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.5,
+    tau = 0.9,
     device = device
 )
 

@@ -112,19 +112,19 @@ class Model(nn.Module):
         # ============================================================
         # 5. HIDDEN STATES, TARGETS, EMA BUFFERS
         # ============================================================
-        self.h_states = {}
-        self.h_targets = {}
-        self.h_ema = {}
+        self.z_states = {}
+        self.z_targets = {}
+        self.z_ema = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
-            self.h_ema[l] = torch.zeros(1, 1, H, device=self.device)
+            self.z_states[l] = torch.zeros(1, 1, H, device=self.device)
+            self.z_ema[l] = torch.zeros(1, 1, H, device=self.device)
 
             if l == 0:
-                self.h_targets[l] = torch.zeros(1, 1, device=self.device)
+                self.z_targets[l] = torch.zeros(1, 1, device=self.device)
             else:
-                self.h_targets[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
+                self.z_targets[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
 
     # ===================================================================
     def summary(self):

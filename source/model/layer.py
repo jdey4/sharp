@@ -108,7 +108,7 @@ class Layer(nn.Module):
 
             return x_next, z_seq, h_next
         
-    def train_step(self, x, y, h0=None, context=None, threshold=1e-5):
+    def train_step(self, x, y, h0=None, context=None, threshold=1e-4):
         logits_rec, logits_pred, z, logvar = self.forward(x, h0, context)
 
         # layer-specific loss
