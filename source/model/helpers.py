@@ -115,7 +115,9 @@ def sleep_train_layer(
             stm_queue.append(z_target.clone())
             z_target = z_ema.clone()
             window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-            loss, _, _, _, _ = model.layers[target_layer].train_step(window, z_target)
+            loss, _, _, _, _ = model.layers[target_layer].train_step(
+                                    window, z_target
+                                )
 
 
     print('Sleeping memory loss ', loss)
