@@ -2,7 +2,6 @@
 from source.utils import get_sequence, DatasetConverter
 from source.utils import CrossEntropyL1Loss, MSEL1Loss
 from source.model.model import Model
-from source.model.helpers import sleep_train_layer
 
 import torch
 import torch.nn as nn
@@ -86,9 +85,10 @@ device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cp
 
 print("Using device:", device)
 
-# ---- Parameters (your style) ----
+# ---- Parameters ----
+sleep_interval_wake = 10000
 total_samples, n_community, n_members = 100000, 2, 3
-total_layers, short_term_memory = 3, 3
+total_layers, short_term_memory = 2, 3
 
 vocab_size = n_community * n_members + 1
 
@@ -107,11 +107,11 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 180, 540],    # H0, H1, H2
+    hidden_sizes = [60, 180],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
-    lr_layers = [1e-3, 1e-3, 1e-3],   
+    lr_layers = [1e-3, 1e-3],   
 
     # ---- Optimizer type (user can choose) ----
     optimizer_class = torch.optim.Adam,
@@ -123,7 +123,7 @@ model = Model(
     short_term_memory = 3,
     ema_alpha = 0.3,
     sleep_interval = 1000,
-    sleep_steps = {1: 100, 2: 100},   # layer 2 is the top
+    sleep_steps = {1: 1000, 2: 1000},   # layer 2 is the top
 
     # ---- Misc ----
     tau = 0.9,
@@ -133,12 +133,28 @@ model = Model(
 model.summary()
 
 ii = 0 
+correct_ring = np.zeros(1000)
 for x, y in loader:
-    loss, _, _, _, _ = model.layers[0].train_step(x,y)
+    #loss, _, _, _, _ = model.layers[0].train_step(x,y)
+    loss = model.wake_step(x,y)
 
-    ii += 1
 
-    if ii%1000 == 0:
-        print("Iter ", ii, " loss: ", loss)
+    with torch.no_grad():
+        ii += 1
+        pred_tok = loss['logits_pred0'].argmax(dim=-1)
+        correct_ring[ii % 1000] = (pred_tok[0, 0] == y[0, 0]).item()
+        
+        if ii%1000 == 0:
+            acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
+            print("Iter ", ii, " loss: ", loss['loss0'], "Acc: ", acc)
+
+    if ii % sleep_interval_wake == 0:
+        print("Entering sleep ...")
+        for _ in range(5):
+            for layer in range(1, model.total_layers):
+                model.sleep_train_layer(
+                        target_layer=layer
+                    )
+                #print("Layer ",layer, " sleep loss: ", sleep_loss)
 
 # %%

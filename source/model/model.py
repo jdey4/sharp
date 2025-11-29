@@ -180,8 +180,8 @@ class Model(nn.Module):
         # Context for layer 0 is the prediction from layer 1 (if exists)
         if self.total_layers > 1:
             # last stored prediction of layer 1
-            ctx0 = torch.concatenat(
-                (self.last_pred[1], self.z_ema[1]),
+            ctx0 = torch.cat(
+                (self.last_pred[1], self.z_states[1]),
                 dim=-1
             )
         else:
@@ -208,7 +208,11 @@ class Model(nn.Module):
         with torch.no_grad():
             for l in range(1, self.total_layers):
 
-                stride = self.short_term_memory ** l
+                if l == 1:
+                    stride = 1
+                else:
+                    stride = self.short_term_memory ** (l-1)
+
                 if t % stride != 0:
                     continue
 
@@ -217,8 +221,8 @@ class Model(nn.Module):
 
                 # Context is prediction from layer above
                 if l + 1 < self.total_layers:
-                    ctx_l = torch.concatenate(
-                        (self.last_pred[l+1], self.z_ema[l+1]),
+                    ctx_l = torch.cat(
+                        (self.last_pred[l+1], self.z_states[l+1]),
                         dim=-1
                     )
                 else:
@@ -248,7 +252,7 @@ class Model(nn.Module):
     # Sleep replay (for a layer-pair)
     # =========================
     def sleep_train_layer(
-        self, target_layer, replay_steps
+        self, target_layer
     ):
         r"""
             Sleep-phase replay for hierarchical consolidation in the model.
@@ -289,14 +293,7 @@ class Model(nn.Module):
                 Index of the layer to train during sleep.
                 The source layer is (target_layer - 1).
 
-            replay_steps : int
-                Number of synthetic replay steps to generate.
-                Actual internal steps = replay_steps * short_term_memory.
-
-            short_term_memory : int
-                Size of temporal context window for the target layer.
-                Acts as the sleep-time “bPTT window”.
-
+            
             ─────────────────────────────────────────────────────────────
             RETURNS
             ─────────────────────────────────────────────────────────────
@@ -332,8 +329,8 @@ class Model(nn.Module):
         z_target = torch.zeros(1, 1, H_lower, device=self.device)
 
         # Training loop
-        total_steps = replay_steps * train_stride
-        for t in range(1, total_steps + 1):
+        total_steps = self.sleep_steps[target_layer] * train_stride
+        for t in range(total_steps):
             if t == 0:
                 x_next, z, h = self.layers[source_layer].generate_sample()
             else:
