@@ -106,10 +106,11 @@ class PredictionFiLM(nn.Module):
             Returns:
                 Tensor (B, T, output_size)
     """
-    def __init__(self, input_size, output_size, context_size=0):
+    def __init__(self, input_size, output_size, tau, context_size=0):
         super().__init__()
         self.context_size = context_size
         self.input_size = input_size
+        self.tau = tau
 
         # Base linear layers
         self.l1 = nn.Linear(input_size, output_size)
@@ -126,9 +127,15 @@ class PredictionFiLM(nn.Module):
 
         self.norm = nn.LayerNorm(input_size)
 
-    def forward(self, h, context=None):
+    # ----------------------------------------------------------
+    def threshold(self, x):
+        # Hard threshold ReLU
+        return torch.where(x > self.tau, x, torch.zeros_like(x))
+    
+    # ----------------------------------------------------------
+    def forward(self, z, context=None):
         """
-        h: (B, T, input_size)
+        z: (B, T, input_size)
         context: (B, T, context_size) or None
         """
 
@@ -136,16 +143,16 @@ class PredictionFiLM(nn.Module):
             if context is None:
                 # fall back to zero context
                 context = torch.zeros(
-                    h.size(0), h.size(1), self.context_size,
-                    device=h.device, dtype=h.dtype
+                    z.size(0), z.size(1), self.context_size,
+                    device=z.device, dtype=z.dtype
                 )
             # Compute FiLM parameters
             gamma, beta = self.film(context).chunk(2, dim=-1)
             # Apply modulation
-            h = gamma * F.gelu(h) + beta
+            z = gamma * z + beta
 
         # Decode through nonlinear readout
-        x = self.l1(F.gelu(h))
+        x = self.l1(self.threshold(z))
         #y = self.l2(F.gelu(x))
         
         return x

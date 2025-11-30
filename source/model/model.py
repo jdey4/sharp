@@ -76,11 +76,11 @@ class Model(nn.Module):
             # input + context sizes
             if l == 0:
                 inp = self.vocab_size
-                ctx = self.hidden_sizes[l+1]+self.hidden_sizes[l] if self.total_layers > 1 else 0
+                ctx = self.hidden_sizes[l+1] if self.total_layers > 1 else 0
                 emb = self.embedding_dim_l0
             else:
                 inp = self.hidden_sizes[l-1]
-                ctx = self.hidden_sizes[l+1]+self.hidden_sizes[l] if (l+1 < self.total_layers) else 0
+                ctx = self.hidden_sizes[l+1] if (l+1 < self.total_layers) else 0
                 emb = None
 
             # --------------------------
@@ -180,10 +180,7 @@ class Model(nn.Module):
         # Context for layer 0 is the prediction from layer 1 (if exists)
         if self.total_layers > 1:
             # last stored prediction of layer 1
-            ctx0 = torch.cat(
-                (self.last_pred[1], self.z_states[1]),
-                dim=-1
-            )
+            ctx0 = self.z_states[1]
         else:
             ctx0 = None
 
@@ -221,10 +218,7 @@ class Model(nn.Module):
 
                 # Context is prediction from layer above
                 if l + 1 < self.total_layers:
-                    ctx_l = torch.cat(
-                        (self.last_pred[l+1], self.z_states[l+1]),
-                        dim=-1
-                    )
+                    ctx_l = self.z_states[l+1]
                 else:
                     ctx_l = None
 

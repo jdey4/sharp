@@ -86,7 +86,7 @@ device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cp
 print("Using device:", device)
 
 # ---- Parameters ----
-sleep_interval_wake = 10000
+sleep_interval_wake = 30000
 total_samples, n_community, n_members = 100000, 2, 3
 total_layers, short_term_memory = 2, 3
 
@@ -121,12 +121,12 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = 3,
-    ema_alpha = 0.3,
+    ema_alpha = 0.0,
     sleep_interval = 1000,
     sleep_steps = {1: 1000, 2: 1000},   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.9,
+    tau = 0.3,
     device = device
 )
 
@@ -150,7 +150,7 @@ for x, y in loader:
 
     if ii % sleep_interval_wake == 0:
         print("Entering sleep ...")
-        for _ in range(5):
+        for _ in range(1):
             for layer in range(1, model.total_layers):
                 model.sleep_train_layer(
                         target_layer=layer

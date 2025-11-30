@@ -205,13 +205,9 @@ class MemoryVAE(nn.Module):
         nn.init.xavier_uniform_(self.fc_logvar.weight)
 
     # ----------------------------------------------------------
-    def threshold(self, mu):
-        r"""
-            Hard thresholded ReLU:
-                y_i = mu_i if mu_i > tau else 0
-            This is effectively a ReLU with threshold tau.
-        """
-        return mu * (mu > self.tau)
+    def threshold(self, x):
+        # Hard threshold ReLU
+        return torch.where(x > self.tau, x, torch.zeros_like(x))
 
     # --------------------------------------------------------------
     def reparameterize(self, mu, logvar):
