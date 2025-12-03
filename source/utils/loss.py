@@ -141,7 +141,7 @@ class CrossEntropyLayerLoss(nn.Module):
             targets_pred.reshape(Bp*Tp)
         )
         
-        return self.recon_weight * loss_recon + self.pred_weight * loss_pred
+        return self.recon_weight * loss_recon + self.pred_weight * loss_pred, loss_recon
     
     
     

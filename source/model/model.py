@@ -6,7 +6,6 @@ from .layer import Layer
 from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss
 
 
-
 class Model(nn.Module):
     """
         Hierarchical predictive + memory model.
@@ -76,11 +75,11 @@ class Model(nn.Module):
             # input + context sizes
             if l == 0:
                 inp = self.vocab_size
-                ctx = self.hidden_sizes[l+1] if self.total_layers > 1 else 0
+                ctx = self.hidden_sizes[l] if self.total_layers > 1 else 0
                 emb = self.embedding_dim_l0
             else:
                 inp = self.hidden_sizes[l-1]
-                ctx = self.hidden_sizes[l+1] if (l+1 < self.total_layers) else 0
+                ctx = self.hidden_sizes[l] if (l+1 < self.total_layers) else 0
                 emb = None
 
             # --------------------------
@@ -89,7 +88,9 @@ class Model(nn.Module):
             if l == 0:
                 loss_fn = CrossEntropyLayerLoss()
             else:
-                loss_fn = MSELayerLoss()
+                loss_fn = nn.MSELoss()
+
+
 
             # Use layer-specific LR
             local_opt_kwargs = dict(self.optimizer_kwargs)
@@ -114,21 +115,21 @@ class Model(nn.Module):
         # 5. HIDDEN STATES, TARGETS, EMA BUFFERS
         # ============================================================
         self.z_states = {}
-        self.z_targets = {}
         self.z_ema = {}
         self.last_pred = {}
+        self.h = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
             self.z_states[l] = torch.zeros(1, 1, H, device=self.device)
             self.z_ema[l] = torch.zeros(1, 1, H, device=self.device)
+            self.h[l] = torch.zeros(1, 1, H, device=self.device)
 
             if l == 0:
-                self.z_targets[l] = torch.zeros(1, 1, device=self.device)
                 self.last_pred[l] = torch.zeros(1, 1, self.vocab_size, device=self.device)
             else:
-                self.z_targets[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
-                self.last_pred[l] = torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
+                self.last_pred[l] = self.layers[l].prediction(self.z_ema[l])
+                #torch.zeros(1, 1, self.hidden_sizes[l-1]).to(self.device)
 
 
 
@@ -147,24 +148,8 @@ class Model(nn.Module):
     def wake_step(self, x, y):
         r"""
             One wake-phase update.
-
-            Behavior:
-            - Layer 0:
-                * trains (memory + prediction) on every step with gradient
-                * updates z_states[0] and z_ema[0]
-
-            - Layer l ≥ 1:
-                * only updates its z_state (NO weight update) when
-                        step % (short_term_memory ** l) == 0
-                * input  = z_ema[l-1]      (downsampled snapshot from below)
-                * context = z_states[l+1]  (if exists, else None)
-
-            This implements a temporal hierarchy:
-                L0: fast timescale
-                L1: slower (every short_term_memory^1 steps)
-                L2: even slower (every short_term_memory^2 steps)
         """
-        if not hasattr(self, "wake_step_counter"):
+        if not hasattr(self, "wake_step_counter") or self.wake_step_counter>1e6:
             self.wake_step_counter = 0
 
         self.wake_step_counter += 1
@@ -180,15 +165,21 @@ class Model(nn.Module):
         # Context for layer 0 is the prediction from layer 1 (if exists)
         if self.total_layers > 1:
             # last stored prediction of layer 1
-            ctx0 = self.z_states[1]
+            ctx0 = self.last_pred[1].detach()
         else:
             ctx0 = None
 
         # Train layer 0 normally
-        loss0, rec0, pred0, z0, _ = self.layers[0].train_step(
+        '''loss0, rec0, z0, _ = self.layers[0].train_memory(
+                                x, h0=None
+                            )
+        loss_pred, pred0 = self.layers[0].train_prediction(
+                                z0, y, context=ctx0
+                            )'''
+        loss0, loss_mem, rec0, pred0, z0, _ = self.layers[0].train_step(
             x, y, h0=None, context=ctx0
         )
-
+        
         # update latent & EMA
         z0_seq = z0.unsqueeze(1)
         self.z_states[0] = z0_seq
@@ -202,42 +193,51 @@ class Model(nn.Module):
         # UPPER LAYERS — NO LEARNING, ONLY STATE UPDATE
         # ============================================================
 
-        with torch.no_grad():
-            for l in range(1, self.total_layers):
+        for l in range(1, self.total_layers):
 
-                if l == 1:
-                    stride = 1
-                else:
-                    stride = self.short_term_memory ** (l-1)
+            stride = self.short_term_memory ** l
 
-                if t % stride != 0:
-                    continue
+            if t % stride != 0:
+                continue
 
-                # Memory input is EMA of below layer
-                inp_l = self.z_ema[l-1]
+            # Memory input is EMA of below layer
+            current_z = self.z_ema[l-1].detach()
 
-                # Context is prediction from layer above
-                if l + 1 < self.total_layers:
-                    ctx_l = self.z_states[l+1]
-                else:
-                    ctx_l = None
+            loss = self.layers[l].loss(self.last_pred[l], current_z)
 
-                # — This call gives both z_l AND pred_l —
-                with torch.no_grad():
-                    _, pred_l, z_l, _ = self.layers[l](inp_l, h0=None, context=ctx_l)
+            # backprop
+            self.layers[l].pred_optimizer.zero_grad()
+            loss.backward()
+            self.layers[l].pred_optimizer.step()
 
-                # update states
-                z_l_seq = z_l.unsqueeze(1)
-                self.z_states[l] = z_l_seq
-                self.z_ema[l]    = self.ema_alpha * self.z_ema[l] + \
-                                    (1 - self.ema_alpha) * z_l_seq
 
-                # store for downstream context
-                self.last_pred[l] = pred_l
+            if self.wake_step_counter%1000==0:
+                print("Layer 2 prediction loss ", loss.item())
+            # Context is prediction from layer above
+            if l + 1 < self.total_layers:
+                ctx_l = self.last_pred[l+1].detach()
+            else:
+                ctx_l = None
+
+            z_l, self.h[l] = self.layers[l].memory.encode_step_from_vec(
+                                current_z, self.h[l]
+                            )
+            
+            pred_l = self.layers[l].prediction(z_l, context=ctx_l)
+            #print("l1 pred loss ", l_)
+            # update states
+            z_l_seq = z_l.unsqueeze(1)
+            self.z_states[l] = z_l_seq
+            self.z_ema[l]    = self.ema_alpha * self.z_ema[l] + \
+                                (1 - self.ema_alpha) * z_l_seq
+
+            # store for downstream context
+            self.last_pred[l] = pred_l
 
         return dict(
             step=t,
-            loss0=loss0,
+            loss_mem=loss_mem,
+            loss_pred=loss0,
             logits_rec0=rec0,
             logits_pred0=pred0
         )
@@ -338,7 +338,7 @@ class Model(nn.Module):
                 stm_queue.append(z_target.clone())
                 z_target = z_ema.clone()
                 window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-                loss, _, _, _, _ = self.layers[target_layer].train_step(
+                loss, _, _, _ = self.layers[target_layer].train_memory(
                                         window, z_target
                                     )
 

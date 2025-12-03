@@ -38,12 +38,19 @@ class Layer(nn.Module):
         )
         self.prediction = PredictionFiLM(
             self.hidden_size, self.input_size,
-            context_size=self.context_size
+            tau=tau, context_size=self.context_size
         )
 
         # ---------------------------------------------------------
         #                    OPTIMIZER
         # ---------------------------------------------------------
+
+        self.mem_optimizer = optimizer_class(
+            self.memory.parameters(), **optimizer_kwargs
+            )
+        self.pred_optimizer = optimizer_class(
+            self.prediction.parameters(), **optimizer_kwargs
+            )
         # One optimizer that updates BOTH memory + prediction
         all_params = itertools.chain(
             self.memory.parameters(),
@@ -51,6 +58,7 @@ class Layer(nn.Module):
         )
 
         self.optimizer = optimizer_class(all_params, **optimizer_kwargs)
+
 
     def forward(self, x, h0=None, context=None):
         logits_reconstruction, z, logvar = self.memory(x, h0)   # mu: (B,H)
@@ -107,12 +115,52 @@ class Layer(nn.Module):
             x_next = self.prediction(z_seq)         # (1,1,input_size)
 
             return x_next, z_seq, h_next
-        
-    def train_step(self, x, y, h0=None, context=None, threshold=1e-4):
+
+    def train_memory(self, x, h0=None, threshold=1e-4):
+        logits_rec, z, logvar = self.memory(x, h0)
+
+        if self.layer == 0:
+            B, T, V = logits_rec.shape
+            loss = self.loss(
+                logits_rec.reshape(B*T, V),
+                x.reshape(B*T)
+            )
+        else:
+            loss = self.loss(logits_rec, x)
+
+        # backprop
+        if loss > threshold:
+            self.mem_optimizer.zero_grad()
+            loss.backward()
+            self.mem_optimizer.step()
+
+        return loss.item(), logits_rec, z.detach(), logvar
+    
+    def train_prediction(self, z, y, context=None, threshold=1e-4):
+        logits_pred = self.prediction(z, context)
+        #print(logits_pred.shape, z.shape, y.shape)
+        if self.layer == 0:
+            loss = self.loss(
+                logits_pred,
+                y.reshape(1)
+            )
+        else:
+            loss = self.loss(logits_pred,  y)
+
+        # backprop
+        if loss > threshold:
+            self.pred_optimizer.zero_grad()
+            loss.backward()
+            self.pred_optimizer.step()
+
+        return loss.item(), logits_pred.detach()
+
+
+    def train_step(self, x, y, h0=None, context=None, threshold=1e-9):
         logits_rec, logits_pred, z, logvar = self.forward(x, h0, context)
 
         # layer-specific loss
-        loss = self.loss(
+        loss, loss_recon = self.loss(
             logits_rec,  x,
             logits_pred, y
         )
@@ -123,4 +171,7 @@ class Layer(nn.Module):
             loss.backward()
             self.optimizer.step()
 
-        return loss.item(), logits_rec, logits_pred, z, logvar
+        return loss.item(), loss_recon.item(), logits_rec, logits_pred, z, logvar
+    
+
+    

@@ -125,7 +125,7 @@ class PredictionFiLM(nn.Module):
         else:
             self.film = None
 
-        self.norm = nn.LayerNorm(input_size)
+        #self.norm1 = nn.LayerNorm(output_size)
 
     # ----------------------------------------------------------
     def threshold(self, x):
@@ -152,7 +152,10 @@ class PredictionFiLM(nn.Module):
             z = gamma * z + beta
 
         # Decode through nonlinear readout
-        x = self.l1(self.threshold(z))
+        x = self.l1(nn.functional.gelu(z))
+        
+        #x = self.threshold(x_)
+
         #y = self.l2(F.gelu(x))
         
         return x
