@@ -115,6 +115,55 @@ class Layer(nn.Module):
             x_next = self.prediction(z_seq)         # (1,1,input_size)
 
             return x_next, z_seq, h_next
+    
+
+    def compute_mem_loss(self, logits_rec, x):
+        """
+        Compute memory (reconstruction) loss.
+        No optimization step here — pure forward loss.
+        """
+
+        # ---- LAYER 0: Cross entropy over vocabulary ----
+        if self.layer == 0:
+            # logits_rec: (B,1,V) or (B,T,V)
+            # x: (B,1) or (B,T)
+
+            # Flatten to (B*T, V)
+            B, T, V = logits_rec.shape
+            logits_flat = logits_rec.reshape(B*T, V)
+            targets_flat = x.reshape(B*T)
+
+            loss = self.loss(logits_flat, targets_flat)
+
+        # ---- HIGHER LAYERS: MSE ----
+        else:
+            # logits_rec: (B,1,H)
+            # x: (B,1,H)
+            loss = self.loss(logits_rec, x)
+
+        return loss
+
+    def compute_pred_loss(self, logits_pred, y):
+        """
+        Compute prediction loss only.
+        No params updated here.
+        """
+
+        # ---- LAYER 0: Cross entropy over vocabulary ----
+        if self.layer == 0:
+            # logits_pred: (B,1,V) -> (B,V)
+            logits = logits_pred.squeeze(1)
+
+            # y: (B,1) -> (B,)
+            targets = y.squeeze(1).long()
+
+            loss = self.loss(logits, targets)
+
+        # ---- HIGHER LAYERS ----
+        else:
+            loss = self.loss(logits_pred, y)
+
+        return loss
 
     def train_memory(self, x, h0=None, threshold=1e-4):
         logits_rec, z, logvar = self.memory(x, h0)

@@ -18,8 +18,8 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members = 1000000, 2, 3
-total_layers, short_term_memory = 1, 7
+total_samples, n_community, n_members = 10000000, 2, 10
+total_layers, short_term_memory = 3, 3
 
 vocab_size = n_community * n_members + 1
 
@@ -38,26 +38,26 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60],    # H0, H1, H2
-    embedding_dim_l0 = 30,
+    hidden_sizes = [90, 270, 810],    # H0, H1, H2
+    embedding_dim_l0 = 50,
 
     # ---- Learning rates per layer ----
-    lr_layers = [1e-3],   
+    lr_layers = [1e-3, 1e-3, 1e-3],   
 
     # ---- Optimizer type (user can choose) ----
     optimizer_class = torch.optim.Adam,
     optimizer_kwargs = {
-        "weight_decay": 1e-8
+        "weight_decay": 1e-12
     },
 
     # ---- Sleep hyperparameters ----
     short_term_memory = 3,
-    ema_alpha = 0.1,
+    ema_alpha = 0.3,
     sleep_interval = 1000,
-    sleep_steps = {1: 1000, 2: 1000},   # layer 2 is the top
+    sleep_steps = {1: 10000, 2: 10000},   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.8,
+    tau = 0.1,
     device = device
 )
 
@@ -79,13 +79,13 @@ for x, y in loader:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
             print("Iter ", ii, "prediction loss: ", loss['loss_pred'], "memory loss: ", loss['loss_mem'], "Acc: ", acc)
 
-    '''if ii % sleep_interval_wake == 0:
+    if ii % sleep_interval_wake == 0:
         print("Entering sleep ...")
         for _ in range(1):
             for layer in range(1, model.total_layers):
                 model.sleep_train_layer(
                         target_layer=layer
-                    )'''
+                    )
                 #print("Layer ",layer, " sleep loss: ", sleep_loss)
 
 # %%
