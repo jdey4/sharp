@@ -143,21 +143,82 @@ class Model(nn.Module):
         print(f"Device: {self.device}")
         print("=================================\n")
 
+
     def wake_step(self, x, y):
         """
-        Wake-phase update.
+        Joint wake update:
+        - L0 memory + prediction are trained every step.
+        - Upper-layer prediction heads are trained when their horizon closes.
+        - Context to each layer l is [pred_{l+1}, z_ema_{l+1}] (when l+1 exists).
+        """
 
-        - Every step:
-            * L0 memory runs forward.
-            * All layers' prediction heads run forward.
-            * L0 reconstruction + prediction losses are backpropagated
-            through ALL prediction heads and L0 memory (via optimizer_wake).
+        self.step += 1
+        t = self.step
 
-        - For each upper layer l >= 1:
-            * Its memory (z_states[l], z_ema[l]) is only updated when
-            t % stride_l == 0, where stride_l = short_term_memory ** l.
-            * Its prediction loss is only added (and backprop’ed) when
-            (t + 1) % stride_l == 0 (horizon closure).
+        x = x.to(self.device)
+        y = y.to(self.device)
+        
+        # ---------------- LAYER 0 FORWARD ----------------
+        logits_rec0, z0, _ = self.layers[0].memory(x, None)
+
+        # update L0 EMA/state (no grad restriction)
+        z0_seq          = z0.unsqueeze(1).detach()
+        self.z_states[0]= z0_seq
+        self.z_ema[0]   = self.ema_alpha * self.z_ema[0] + (1 - self.ema_alpha) * z0_seq
+
+        # ------------- UPDATE UPPER STATES & NEW PREDICTIONS -------------
+        for l in range(1, self.total_layers):
+            stride = self.short_term_memory ** l
+            if t % stride != 0:
+                continue
+
+            current_z = self.z_ema[l - 1].detach()
+
+            z_l, self.h[l] = self.layers[l].memory.encode_step_from_vec(
+                current_z, self.h[l]
+            )
+            z_l = z_l.detach()      # freeze dynamics
+
+            # update EMA/state for layer l
+            z_l_seq            = z_l
+            self.z_states[l]   = z_l_seq
+            self.z_ema[l]      = self.ema_alpha * self.z_ema[l] + \
+                                  (1 - self.ema_alpha) * z_l_seq
+        
+        # ------------- UPDATE UPPER NEW PREDICTIONS -------------
+        for l in reversed(range(1, self.total_layers)):
+            current_z = self.z_ema[l].detach()
+
+            # context from ABOVE: [pred_{l+1}, z_ema_{l+1}]
+            if l + 1 < self.total_layers:
+                ctx_pred = self.last_pred[l + 1].detach()   # dim H_l
+                ctx_mem  = self.z_ema[l + 1].detach()       # dim H_{l+1}
+                ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
+            else:
+                ctx_l = None
+
+            pred_l = self.layers[l].prediction(current_z, ctx_l)
+            self.last_pred[l] = pred_l
+
+        if self.total_layers > 1:
+            # pred_1 has dim H0, z_ema[1] has dim H1
+            ctx_pred1 = self.last_pred[1]
+            ctx_mem1  = self.z_ema[1].detach()
+            #print(ctx_pred1.shape, ctx_mem1.shape)
+            ctx0      = torch.cat([ctx_pred1, ctx_mem1], dim=-1)
+        else:
+            ctx0 = None
+
+        pred0 = self.layers[0].prediction(z0, ctx0)
+            
+
+    
+    def wake_step(self, x, y):
+        """
+        Joint wake update:
+        - L0 memory + prediction are trained every step.
+        - Upper-layer prediction heads are trained when their horizon closes.
+        - Context to each layer l is [pred_{l+1}, z_ema_{l+1}] (when l+1 exists).
         """
 
         self.step += 1
@@ -166,101 +227,87 @@ class Model(nn.Module):
         x = x.to(self.device)
         y = y.to(self.device)
 
-        # ---------------------------------------
-        # 1) L0 MEMORY FORWARD (every step)
-        # ---------------------------------------
-        # memory(x) -> logits_rec0: (B, T, V), z0: (B, H0)
+        # ---------------- LAYER 0 FORWARD ----------------
         logits_rec0, z0, _ = self.layers[0].memory(x, None)
 
-        # store as (B, 1, H0) for consistency
-        z0_seq = z0.unsqueeze(1)
-        self.z_states[0] = z0_seq
-        self.z_ema[0] = self.ema_alpha * self.z_ema[0] + (1.0 - self.ema_alpha) * z0_seq
+        if self.total_layers > 1:
+            # pred_1 has dim H0, z_ema[1] has dim H1
+            ctx_pred1 = self.last_pred[1].detach()
+            ctx_mem1  = self.z_ema[1].detach()
+            #print(ctx_pred1.shape, ctx_mem1.shape)
+            ctx0      = torch.cat([ctx_pred1, ctx_mem1], dim=-1)
+        else:
+            ctx0 = None
 
-        # ---------------------------------------
-        # 2) UPDATE UPPER-LAYER MEMORY SPARINGLY
-        # ---------------------------------------
-        for l in range(1, self.total_layers):
-            # multi-scale stride: layer l sees chunks of length short_term_memory**l
-            stride_l = self.short_term_memory ** l
+        pred0 = self.layers[0].prediction(z0, ctx0)
 
-            # only update memory states at stride boundaries
-            if t % stride_l != 0:
-                continue
-
-            # lower-layer EMA is input to this layer's memory
-            lower_z_ema = self.z_ema[l - 1]          # (B, 1, H_{l-1})
-            z_l_seq, self.h[l] = self.layers[l].memory.encode_step_from_vec(
-                lower_z_ema, self.h[l]
-            )                                        # expect (B, 1, H_l)
-
-            self.z_states[l] = z_l_seq
-            self.z_ema[l] = self.ema_alpha * self.z_ema[l] + (1.0 - self.ema_alpha) * z_l_seq
-
-        # ---------------------------------------
-        # 3) FORWARD THROUGH ALL PREDICTION HEADS
-        #    (no detach -> gradients can flow)
-        # ---------------------------------------
-        preds = {}
-
-        # go top-down so that context from layer l+1 is available for l
-        for l in reversed(range(self.total_layers)):
-            if l + 1 < self.total_layers:
-                # context = [pred_{l+1}, z_ema_{l+1}]
-                #   pred_{l+1}: (B,1,H_l)      (since PredictionFiLM outputs input_size)
-                #   z_ema_{l+1}: (B,1,H_{l+1})
-                ctx_pred = preds[l + 1]
-                ctx_mem = self.z_ema[l + 1].detach()
-                ctx = torch.cat([ctx_pred, ctx_mem], dim=-1)
-            else:
-                ctx = None
-
-            z_in = self.z_states[l]   # (B,1,H_l)
-            preds[l] = self.layers[l].prediction(z_in, ctx)
-
-        # ---------------------------------------
-        # 4) L0 LOSSES (every step)
-        # ---------------------------------------
         loss_mem0  = self.layers[0].compute_mem_loss(logits_rec0, x)
-        loss_pred0 = self.layers[0].compute_pred_loss(preds[0], y)
+        loss_pred0 = self.layers[0].compute_pred_loss(pred0, y)
 
-        total_loss = loss_mem0 + loss_pred0
+        if loss_mem0>1e-3:
+            total_loss = loss_mem0 + loss_pred0
+        else:
+            total_loss = loss_pred0
 
-        # ---------------------------------------
-        # 5) UPPER-LAYER PREDICTION LOSSES
-        #    only when (t+1) % stride_l == 0
-        # ---------------------------------------
+
+        # update L0 EMA/state (no grad restriction)
+        z0_seq          = z0.unsqueeze(1)
+        self.z_states[0]= z0_seq
+        self.z_ema[0]   = self.ema_alpha * self.z_ema[0] + (1 - self.ema_alpha) * z0_seq
+        self.last_pred[0]= pred0
+
+        # ------------- UPPER-LAYER PREDICTION LOSSES -------------
         for l in range(1, self.total_layers):
-            stride_l = self.short_term_memory ** l
-
-            # horizon closure for layer l
-            if (t + 1) % stride_l != 0:
+            stride = self.short_term_memory ** l
+            if (t + 1) % stride != 0:
                 continue
 
-            # target is frozen lower-layer EMA
-            target_z = self.z_ema[l - 1].detach()   # (B,1,H_{l-1})
-            pred_l   = preds[l]                     # (B,1,H_{l-1})
-
-            loss_l = self.layers[l].compute_pred_loss(pred_l, target_z)
+            target_z = self.z_ema[l - 1].detach()   # dim H_{l-1}
+            pred     = self.last_pred[l]            # same dim
+            loss_l   = self.layers[l].compute_pred_loss(pred, target_z)
             total_loss = total_loss + loss_l
-
-        # ---------------------------------------
-        # 6) JOINT BACKWARD THROUGH ALL HEADS
-        # ---------------------------------------
+        
+        # ------------- JOINT BACKWARD + STEP -------------
         self.optimizer_wake.zero_grad()
         total_loss.backward()
         self.optimizer_wake.step()
 
-        # keep detached copies for later context if you still use last_pred
-        for l in range(self.total_layers):
-            self.last_pred[l] = preds[l].detach()
+        # ------------- UPDATE UPPER STATES & NEW PREDICTIONS -------------
+        for l in range(1, self.total_layers):
+            stride = self.short_term_memory ** l
+            if t % stride != 0:
+                continue
+
+            current_z = self.z_ema[l - 1].detach()
+
+            # context from ABOVE: [pred_{l+1}, z_ema_{l+1}]
+            if l + 1 < self.total_layers:
+                ctx_pred = self.last_pred[l + 1].detach()   # dim H_l
+                ctx_mem  = self.z_ema[l + 1].detach()       # dim H_{l+1}
+                ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
+            else:
+                ctx_l = None
+
+            z_l, self.h[l] = self.layers[l].memory.encode_step_from_vec(
+                current_z, self.h[l]
+            )
+            z_l = z_l.detach()      # freeze dynamics
+
+            pred_l = self.layers[l].prediction(z_l, ctx_l)
+            self.last_pred[l] = pred_l
+
+            # update EMA/state for layer l
+            z_l_seq            = z_l
+            self.z_states[l]   = z_l_seq
+            self.z_ema[l]      = self.ema_alpha * self.z_ema[l] + \
+                                  (1 - self.ema_alpha) * z_l_seq
 
         return dict(
-            step      = t,
-            loss_mem  = float(loss_mem0.detach()),
-            loss_pred = float(loss_pred0.detach()),
-            logits_rec0  = logits_rec0.detach(),
-            logits_pred0 = preds[0].detach(),
+            step=t,
+            loss_mem=loss_mem0.item(),
+            loss_pred=loss_pred0.item(),
+            logits_rec0=logits_rec0.detach(),
+            logits_pred0=pred0.detach(),
         )
 
     # =========================
