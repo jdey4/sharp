@@ -18,7 +18,7 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members = 10000000, 2, 10
+total_samples, n_community, n_members = 10000000, 2, 3
 total_layers, short_term_memory = 3, 3
 
 vocab_size = n_community * n_members + 1
@@ -38,8 +38,8 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [90, 270, 810],    # H0, H1, H2
-    embedding_dim_l0 = 50,
+    hidden_sizes = [30, 30, 30],    # H0, H1, H2
+    embedding_dim_l0 = 20,
 
     # ---- Learning rates per layer ----
     lr_layers = [1e-3, 1e-3, 1e-3],   
@@ -52,17 +52,18 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = 3,
-    ema_alpha = 0.3,
     sleep_interval = 1000,
     sleep_steps = {1: 10000, 2: 10000},   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.1,
+    tau = 0.7,
+    threshold = 1e-4,
     device = device
 )
 
 model.summary()
 
+#%%
 ii = 0 
 correct_ring = np.zeros(1000)
 for x, y in loader:
