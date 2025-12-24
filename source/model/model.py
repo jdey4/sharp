@@ -59,7 +59,7 @@ class Model(nn.Module):
 
             # context from layer l+1:
             #   - prediction dimension  = hidden_sizes[l]
-            #   - memory z_ema dim      = hidden_sizes[l+1]
+            #   - memory z dim      = hidden_sizes[l+1]
             if l + 1 < self.total_layers:
                 ctx = self.hidden_sizes[l] + self.hidden_sizes[l+1]
             else:
@@ -89,8 +89,16 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         param_groups = []
 
-        # prediction heads for all layers, each with its own lr_layers[l]
-        for l in range(self.total_layers):
+        # L0 memory + its prediction head use lr_layers[0]
+        pg0 = {
+            "params": list(self.layers[0].memory.parameters()) +
+                      list(self.layers[0].prediction.parameters()),
+            "lr": self.lr_layers[0],
+        }
+        param_groups.append(pg0)
+
+        # prediction heads for upper layers, each with its own lr_layers[l]
+        for l in range(1, self.total_layers):
             pg = {
                 "params": list(self.layers[l].prediction.parameters()),
                 "lr": self.lr_layers[l],
@@ -110,14 +118,14 @@ class Model(nn.Module):
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.z_states[l] = torch.zeros(1, H, device=self.device)
+            self.z_states[l] = torch.zeros(1, 1, H, device=self.device)
             self.h[l]        = torch.zeros(1, 1, H, device=self.device)
 
             if l == 0:
                 self.last_pred[l] = torch.zeros(1, 1, self.vocab_size,
                                                 device=self.device)
             else:
-                # initial prediction from zero z_ema
+                # initial prediction from zero z_states
                 self.last_pred[l] = self.layers[l].prediction(self.z_states[l], None)
 
 
@@ -138,7 +146,7 @@ class Model(nn.Module):
         Joint wake update:
         - L0 memory + prediction are trained every step.
         - Upper-layer prediction heads are trained when their horizon closes.
-        - Context to each layer l is [pred_{l+1}, z_ema_{l+1}] (when l+1 exists).
+        - Context to each layer l is [pred_{l+1}, z_states_{l+1}] (when l+1 exists).
         """
 
         self.step += 1
@@ -146,18 +154,49 @@ class Model(nn.Module):
 
         x = x.to(self.device)
         y = y.to(self.device)
+
+        # ---------------- LAYER 0 FORWARD ----------------
+        logits_rec0, z0, _ = self.layers[0].memory(x, None)
+
+        if self.total_layers > 1:
+            # pred_1 has dim H0, z_states[1] has dim H1
+            ctx_pred1 = self.last_pred[1].detach()
+            ctx_mem1  = self.z_states[1].detach()
+            #print(ctx_pred1.shape, ctx_mem1.shape)
+            ctx0      = torch.cat([ctx_pred1, ctx_mem1], dim=-1)
+        else:
+            ctx0 = None
+
+        pred0 = self.layers[0].prediction(z0, ctx0)
+
+        loss_mem0  = self.layers[0].compute_mem_loss(logits_rec0, x)
+        loss_pred0 = self.layers[0].compute_pred_loss(pred0, y)
+
+        if loss_mem0>1e-3:
+            total_loss = loss_mem0 + loss_pred0
+        else:
+            total_loss = loss_pred0
+
+
+        # update L0 EMA/state (no grad restriction)
+        self.z_states[0]= z0.unsqueeze(1)
+        self.last_pred[0]= pred0
+
+        # ------------- UPPER-LAYER PREDICTION LOSSES -------------
+        for l in range(1, self.total_layers):
+            stride = self.short_term_memory ** l
+            if (t + 1) % stride != 0:
+                continue
+
+            target_z = self.z_states[l - 1].detach()   # dim H_{l-1}
+            pred     = self.last_pred[l]            # same dim
+            loss_l   = self.layers[l].compute_pred_loss(pred, target_z)
+            total_loss = total_loss + loss_l
         
-        # ---------------- LAYER 0 memory FORWARD ----------------
-        mem0_loss, _, _, _ = self.layers[0].train_memory(
-                                                    x, threshold=self.threshold
-                                                )
-
-
-        # update L0 state (no grad restriction)
-        with torch.no_grad():
-            _, z0, _ = self.layers[0].memory(x, None)
-        self.z_states[0]= z0
-        #self.z_ema[0]   = self.ema_alpha * self.z_ema[0] + (1 - self.ema_alpha) * z0_seq
+        # ------------- JOINT BACKWARD + STEP -------------
+        self.optimizer_wake.zero_grad()
+        total_loss.backward()
+        self.optimizer_wake.step()
 
         # ------------- UPDATE UPPER STATES & NEW PREDICTIONS -------------
         for l in range(1, self.total_layers):
@@ -165,51 +204,35 @@ class Model(nn.Module):
             if t % stride != 0:
                 continue
 
-            current_z = self.z_states[l - 1].unsqueeze(1)
+            current_z = self.z_states[l - 1].detach()
 
-            z, self.h[l] = self.layers[l].memory.encode_step_from_vec(
-                current_z, self.h[l]
-            )
-            self.z_states[l] = z.squeeze(1)
-        
-        # ------------- UPDATE UPPER NEW PREDICTIONS -------------
-        for l in reversed(range(1, self.total_layers)):
-            current_z = self.z_states[l]
-
-            # context from ABOVE: [pred_{l+1}, z_ema_{l+1}]
+            # context from ABOVE: [pred_{l+1}, z_states_{l+1}]
             if l + 1 < self.total_layers:
-                ctx_pred = self.last_pred[l + 1]      # dim H_l
-                ctx_mem  = self.z_states[l + 1]       # dim H_{l+1}
+                ctx_pred = self.last_pred[l + 1].detach()   # dim H_l
+                ctx_mem  = self.z_states[l + 1].detach()       # dim H_{l+1}
                 ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
             else:
                 ctx_l = None
 
-            pred_l = self.layers[l].prediction(current_z, ctx_l)
+            z_l, self.h[l] = self.layers[l].memory.encode_step_from_vec(
+                current_z, self.h[l]
+            )
+            z_l = z_l.detach()      # freeze dynamics
+
+            pred_l = self.layers[l].prediction(z_l, ctx_l)
             self.last_pred[l] = pred_l
 
-        if self.total_layers > 1:
-            # pred_1 has dim H0, z_ema[1] has dim H1
-            ctx_pred1 = self.last_pred[1]
-            ctx_mem1  = self.z_states[1]
-            #print(ctx_pred1.shape, ctx_mem1.shape)
-            ctx0      = torch.cat([ctx_pred1, ctx_mem1], dim=-1)
-        else:
-            ctx0 = None
-
-        pred0 = self.layers[0].prediction(z0, ctx0)
-        pred_loss = self.layers[0].compute_pred_loss(pred0, y)
-
-        # ------------- JOINT BACKWARD + STEP -------------
-        self.optimizer_wake.zero_grad()
-        pred_loss.backward()
-        self.optimizer_wake.step()
+            # update EMA/state for layer l
+            self.z_states[l]   = z_l
 
         return dict(
             step=t,
-            loss_mem=mem0_loss,
-            loss_pred=pred_loss.item(),
+            loss_mem=loss_mem0.item(),
+            loss_pred=loss_pred0.item(),
+            logits_rec0=logits_rec0.detach(),
             logits_pred0=pred0.detach(),
         )
+    
 
     # =========================
     # Sleep replay (for a layer-pair)
@@ -230,7 +253,6 @@ class Model(nn.Module):
             - Source layer (L-1): acts like the hippocampus → generates replayed activity.
             - Target layer (L): acts like cortex → slowly learns stable representations.
             - Replay z-trajectories: hippocampal reactivation during NREM sleep.
-            - EMA smoothing: stabilizes replay drift (slow waves, replay compression).
             - No gradient flows to lower layers (hippocampus is a teacher, not a student).
             - Each layer has its own local optimizer (no global backprop).
             
@@ -244,8 +266,8 @@ class Model(nn.Module):
             3. Smooth the replayed z_S over time using exponential moving average (EMA).
             4. Store a sliding window of the last `short_term_memory` z vectors.
             5. Every `short_term_memory` steps, train the target layer on:
-                input  = stacked EMA-smoothed window
-                target = most recent EMA z
+                input  = stacked window
+                target = most recent z
             6. Because each layer has its own optimizer, only the target layer learns.
             Lower layers remain frozen automatically.
 
@@ -271,7 +293,6 @@ class Model(nn.Module):
             - Lower layers never receive gradients (natural freezing).
             - Upper layers learn stable long-timescale patterns.
             - Windowing produces temporal receptive fields (place-field-like tuning).
-            - EMA stabilizes replay and avoids catastrophic drift.
         """
         self.step = 0 #reset wake step size
 

@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [30, 30, 30],    # H0, H1, H2
+    hidden_sizes = [60, 60, 60],    # H0, H1, H2
     embedding_dim_l0 = 20,
 
     # ---- Learning rates per layer ----
