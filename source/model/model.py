@@ -185,7 +185,7 @@ class Model(nn.Module):
         # ------------- UPPER-LAYER PREDICTION LOSSES -------------
         for l in range(1, self.total_layers):
             stride = self.short_term_memory ** l
-            if (t + 1) % stride != 0:
+            if t % stride != 0:
                 continue
 
             target_z = self.z_states[l - 1].detach()   # dim H_{l-1}
@@ -222,7 +222,7 @@ class Model(nn.Module):
             pred_l = self.layers[l].prediction(z_l, ctx_l)
             self.last_pred[l] = pred_l
 
-            # update EMA/state for layer l
+            # update state for layer l
             self.z_states[l]   = z_l
 
         return dict(
@@ -322,7 +322,7 @@ class Model(nn.Module):
                 stm_queue.append(z.clone())
                 window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
                 loss, _, _, _ = self.layers[target_layer].train_memory(
-                                        window, threshold=self.threshold
+                                        window, threshold=0.1
                                     )
 
 

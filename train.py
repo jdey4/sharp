@@ -18,12 +18,12 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members = 10000000, 2, 3
-total_layers, short_term_memory = 3, 3
+total_samples, n_community, n_members = 10000000, 2, 12
+total_layers, short_term_memory = 3, 4
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)#/(n_members/10.0))
+data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/3.0)
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,8 +38,8 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 60, 60],    # H0, H1, H2
-    embedding_dim_l0 = 20,
+    hidden_sizes = [100, 100, 100],    # H0, H1, H2
+    embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
     lr_layers = [1e-3, 1e-3, 1e-3],   
@@ -51,13 +51,13 @@ model = Model(
     },
 
     # ---- Sleep hyperparameters ----
-    short_term_memory = 3,
+    short_term_memory = short_term_memory,
     sleep_interval = 1000,
-    sleep_steps = {1: 10000, 2: 10000},   # layer 2 is the top
+    sleep_steps = {1: 50000, 2: 50000},   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.7,
-    threshold = 1e-4,
+    tau = 0.1,
+    threshold = 1e-3,
     device = device
 )
 

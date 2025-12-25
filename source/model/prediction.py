@@ -114,7 +114,8 @@ class PredictionFiLM(nn.Module):
 
         # Base linear layers
         self.l1 = nn.Linear(input_size, output_size)
-        #self.l2 = nn.Linear(hidden_size, output_size)
+        self.l2 = nn.Linear(output_size, output_size)
+        self.l3 = nn.Linear(output_size, output_size)
 
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
@@ -152,7 +153,9 @@ class PredictionFiLM(nn.Module):
             z = gamma * z + beta
 
         # Decode through nonlinear readout
-        x = self.l1(nn.functional.gelu(z))
+        x_ = self.l1(nn.functional.gelu(z))
+        x__ = self.l2(nn.functional.gelu(x_))
+        x = self.l3(nn.functional.gelu(x__))
         
         #x = self.threshold(x_)
 
