@@ -60,20 +60,21 @@ class Prediction(nn.Module):
             representations influence next-token or next-state predictions.
     """
 
-    def __init__(self, input_size, hidden_size, output_size, context_size=0):
+    def __init__(self, input_size, output_size, context_size=0):
         super().__init__()
         self.context_size = context_size
-        self.l1 = nn.Linear(input_size + context_size, hidden_size)
-        self.l2 = nn.Linear(hidden_size, output_size)
+        self.l1 = nn.Linear(input_size + context_size, 2*output_size)
+        self.l2 = nn.Linear(2*output_size, output_size)
+
     def forward(self, h, context=None):
         if self.context_size > 0:
             if context is None:
                 context = torch.zeros(h.size(0), h.size(1), self.context_size,
                                       device=h.device, dtype=h.dtype)
-            x_in = torch.cat((h, F.relu(context)), dim=2)
+            x_in = torch.cat((h, F.gelu(context)), dim=-1)
         else:
             x_in = h
-        x = F.relu(self.l1(x_in))
+        x = F.gelu(self.l1(x_in))
         return self.l2(x)
 
 
@@ -106,16 +107,15 @@ class PredictionFiLM(nn.Module):
             Returns:
                 Tensor (B, T, output_size)
     """
-    def __init__(self, input_size, output_size, tau, context_size=0):
+    def __init__(self, input_size, output_size, context_size=0):
         super().__init__()
         self.context_size = context_size
         self.input_size = input_size
-        self.tau = tau
 
         # Base linear layers
-        self.l1 = nn.Linear(input_size, output_size)
-        self.l2 = nn.Linear(output_size, output_size)
-        self.l3 = nn.Linear(output_size, output_size)
+        self.l1 = nn.Linear(input_size, 2*output_size)
+        self.l2 = nn.Linear(2*output_size, 2*output_size)
+        self.l3 = nn.Linear(2*output_size, output_size)
 
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
@@ -128,11 +128,6 @@ class PredictionFiLM(nn.Module):
 
         #self.norm1 = nn.LayerNorm(output_size)
 
-    # ----------------------------------------------------------
-    def threshold(self, x):
-        # Hard threshold ReLU
-        return torch.where(x > self.tau, x, torch.zeros_like(x))
-    
     # ----------------------------------------------------------
     def forward(self, z, context=None):
         """
@@ -156,9 +151,5 @@ class PredictionFiLM(nn.Module):
         x_ = self.l1(nn.functional.gelu(z))
         x__ = self.l2(nn.functional.gelu(x_))
         x = self.l3(nn.functional.gelu(x__))
-        
-        #x = self.threshold(x_)
-
-        #y = self.l2(F.gelu(x))
         
         return x

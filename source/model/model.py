@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import optim
 from collections import deque
 from .layer import Layer  
-from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss
+from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss, MaskedMSELoss
 
 
 class Model(nn.Module):
@@ -21,7 +21,6 @@ class Model(nn.Module):
             lr_layers = None,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
-            sleep_interval = 1000,
             sleep_steps = None,
             device = "cpu",
         )
@@ -68,7 +67,7 @@ class Model(nn.Module):
             if l == 0:
                 loss_fn = nn.CrossEntropyLoss()
             else:
-                loss_fn = nn.MSELoss()
+                loss_fn = MaskedMSELoss()
 
             self.layers.append(
                 Layer(
@@ -135,13 +134,11 @@ class Model(nn.Module):
         print("\n===== Model Summary =====")
         print(f"Total layers: {self.total_layers}")
         print(f"Hidden sizes: {self.hidden_sizes}")
-        print(f"Sleep interval: {self.sleep_interval}")
         print(f"Sleep steps: {self.sleep_steps}")
         print(f"Device: {self.device}")
         print("=================================\n")
 
-
-    def wake_step(self, x, y):
+    '''def wake_step(self, x, y):
         """
         Joint wake update:
         - L0 memory + prediction are trained every step.
@@ -231,8 +228,115 @@ class Model(nn.Module):
             loss_pred=loss_pred0.item(),
             logits_rec0=logits_rec0.detach(),
             logits_pred0=pred0.detach(),
+        )'''
+    
+    def wake_step(self, x, y):
+        """
+        Joint wake update:
+        - L0 memory + prediction are trained every step.
+        - Upper-layer prediction heads are trained when their horizon closes.
+        - Context to each layer l is [pred_{l+1}, z_states_{l+1}] (when l+1 exists).
+        """
+
+        self.step += 1
+        t = self.step
+
+        x = x.to(self.device)
+        y = y.to(self.device)
+
+        # ---------------- LAYER 0 FORWARD ----------------
+        logits_rec0, z0 = self.layers[0].memory(x, None)
+        self.z_states[0]   = z0.unsqueeze(1)
+        
+
+        for l in range(1, self.total_layers):
+            stride = self.short_term_memory ** l
+            if t % stride != 0:
+                continue
+
+            current_z = self.z_states[l - 1]
+            self.z_states[l], self.h[l] = self.layers[l].memory.encode_step_from_vec(
+                                    current_z, self.h[l]
+                                )
+
+        for l in reversed(range(self.total_layers)):
+            # context from ABOVE: [pred_{l+1}, z_states_{l+1}]
+            if l + 1 < self.total_layers:
+                ctx_pred = self.last_pred[l + 1]  # dim H_l
+                ctx_mem  = self.z_states[l + 1]      # dim H_{l+1}
+                ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
+            else:
+                ctx_l = None
+
+            pred_l = self.layers[l].prediction(self.z_states[l], ctx_l)
+            self.last_pred[l] = pred_l
+
+        loss_mem0  = self.layers[0].compute_mem_loss(logits_rec0, x)
+        print(self.last_pred[0][0][0][0],y[0])
+        loss_pred0 = self.layers[0].compute_pred_loss(self.last_pred[0][0][0][0], y[0][0])
+
+        if loss_mem0>self.threshold:
+            total_loss = loss_mem0 + loss_pred0
+        else:
+            total_loss = loss_pred0
+        
+        
+        # ------------- JOINT BACKWARD + STEP -------------
+        self.optimizer_wake.zero_grad()
+        total_loss.backward()
+        self.optimizer_wake.step()
+
+        
+        return dict(
+            step=t,
+            loss_mem=loss_mem0.item(),
+            loss_pred=loss_pred0.item(),
+            logits_rec0=logits_rec0.detach(),
+            logits_pred0=self.last_pred[0].detach(),
         )
     
+
+    def sleep_train_layers(
+            self
+    ):
+        self.step = 0 #reset wake step size 
+
+        input_buffer = {}
+        z_states = {}
+
+        for layer in range(self.total_layers-1):
+            H_size = self.layers[layer].hidden_size
+            input_buffer[layer] = deque(
+                [torch.zeros(1, 1, H_size, device=self.device) for _ in range(self.short_term_memory)],
+                maxlen=self.short_term_memory
+            )
+        
+        # Training loop
+        total_steps = self.sleep_steps
+        for t in range(1,total_steps+1):
+            if t == 1:
+                x_next, z, h = self.layers[0].generate_sample()
+            else:
+                x_next, z, h = self.layers[0].generate_sample(x=x_next, h0=h)
+
+            z_states[0] = z.clone()
+
+            for layer in range(1,self.total_layers):
+                if t%self.short_term_memory**layer == 0:
+                    input_buffer[layer-1].append(z_states[layer-1].clone())
+
+                    window = torch.cat(list(input_buffer[layer-1]), dim=1)  # (1, stm, H_lower)
+                    loss, _, _, _ = self.layers[layer].train_memory(
+                                            window, threshold=0.01
+                                        )
+                    
+                    with torch.no_grad():
+                        _, z_, _ = self.layers[layer].memory(window)
+                        z_states[layer] = z_.unsqueeze(1)
+
+            
+
+
 
     # =========================
     # Sleep replay (for a layer-pair)
@@ -309,7 +413,7 @@ class Model(nn.Module):
         train_stride = self.short_term_memory
 
         # Training loop
-        total_steps = self.sleep_steps[target_layer] * train_stride
+        total_steps = self.sleep_steps * train_stride
         for t in range(total_steps):
             if t == 0:
                 x_next, z, h = self.layers[source_layer].generate_sample()

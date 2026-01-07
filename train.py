@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch import from_numpy as tnsr
 import numpy as np
-import itertools
+import itertools 
 from collections import deque
 
 #%%
@@ -18,12 +18,12 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members = 10000000, 2, 12
-total_layers, short_term_memory = 3, 4
+total_samples, n_community, n_members = 10000000, 2, 5
+total_layers, short_term_memory = 2, 3
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, train_percent=1.0/3.0)
+data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,11 +38,11 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [100, 100, 100],    # H0, H1, H2
+    hidden_sizes = [60, 100],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
-    lr_layers = [1e-3, 1e-3, 1e-3],   
+    lr_layers = [1e-3, 1e-3],   
 
     # ---- Optimizer type (user can choose) ----
     optimizer_class = torch.optim.Adam,
@@ -52,8 +52,7 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    sleep_interval = 1000,
-    sleep_steps = {1: 50000, 2: 50000},   # layer 2 is the top
+    sleep_steps = 10000,   # layer 2 is the top
 
     # ---- Misc ----
     tau = 0.1,
@@ -82,11 +81,12 @@ for x, y in loader:
 
     if ii % sleep_interval_wake == 0:
         print("Entering sleep ...")
-        for _ in range(1):
+        model.sleep_train_layers()
+        '''for _ in range(1):
             for layer in range(1, model.total_layers):
                 model.sleep_train_layer(
                         target_layer=layer
                     )
-                #print("Layer ",layer, " sleep loss: ", sleep_loss)
+                #print("Layer ",layer, " sleep loss: ", sleep_loss)'''
 
-# %%
+    # %%

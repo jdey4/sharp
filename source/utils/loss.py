@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class MaskedMSELoss(nn.Module):
+    """
+    Mean Squared Error computed only over non-zero target entries.
+    """
+
+    def __init__(self, thresh=1e-6, eps=1e-8):
+        super().__init__()
+        self.thresh = thresh
+        self.eps = eps
+
+    def forward(self, pred, target):
+        """
+        pred, target: same shape
+        """
+        mask = (target.abs() > self.thresh).float()
+        diff2 = (pred - target) ** 2
+
+        loss = (diff2 * mask).sum() / (mask.sum() + self.eps)
+        return loss
+    
+    
 class CrossEntropyL1Loss(nn.Module):
     """
     Combined Cross-Entropy + L1 sparsity regularization loss.
@@ -169,3 +190,6 @@ class MSELayerLoss(nn.Module):
 
         # Weighted sum
         return self.recon_weight * loss_recon + self.pred_weight * loss_pred
+    
+
+

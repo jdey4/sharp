@@ -79,11 +79,12 @@ class Memory(nn.Module):
             self-replay during reconstruction.
     """
 
-    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0):
+    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, tau=0.1):
         super().__init__()
         self.layer = layer
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.tau = tau
 
         if layer == 0:
             assert embedding_dim is not None, "embedding_dim required for layer 0"
@@ -104,6 +105,11 @@ class Memory(nn.Module):
             if "weight_hh" in name: nn.init.orthogonal_(p)
             elif "weight_ih" in name: nn.init.xavier_uniform_(p)
             elif "bias" in name: nn.init.zeros_(p)
+    
+    # ----------------------------------------------------------
+    def threshold(self, x):
+        # Hard threshold ReLU
+        return torch.where(x > self.tau, x, torch.zeros_like(x))
 
     def forward(self, x, h0=None):
         if self.layer == 0:
@@ -114,6 +120,8 @@ class Memory(nn.Module):
             _, h = self.encoder(x_emb, h0)
         else:
             _, h = self.encoder(x, h0)
+
+        h = self.threshold(h)
 
         B, T = x.shape[0], x.shape[1]
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
@@ -215,7 +223,7 @@ class MemoryVAE(nn.Module):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         z = mu + eps * std
-        z_sparse = z * (mu > self.tau)  # gate z with same support as mu
+        z_sparse = z * (z > self.tau)  # gate z with same support as mu
         return z_sparse
 
     # --------------------------------------------------------------
@@ -237,7 +245,7 @@ class MemoryVAE(nn.Module):
         # μ, logσ²
         mu = self.fc_mu(h_enc)
         mu = self.mu_norm(mu)       # LayerNorm
-        mu = self.threshold(mu)     # thresholded ReLU
+        #mu = self.threshold(mu)     # thresholded ReLU
 
         logvar = self.fc_logvar(h_enc)
 
@@ -258,7 +266,7 @@ class MemoryVAE(nn.Module):
             dec_in = logits.detach()
 
         logits = torch.cat(outs, dim=1)
-        return logits, z, logvar
+        return logits, z
 
     # --------------------------------------------------------------
     #     Optional incremental encode helpers
@@ -304,3 +312,75 @@ class MemoryVAE(nn.Module):
         z_seq = z.unsqueeze(1)                        # (1,1,H)
 
         return z_seq, h_next
+    
+
+
+class MemoryContinuous(nn.Module):
+
+    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, tau=0.1):
+        super().__init__()
+        self.layer = layer
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.tau = tau
+
+        if layer == 0:
+            assert embedding_dim is not None, "embedding_dim required for layer 0"
+            self.embedding = nn.Embedding(input_size, embedding_dim)
+            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
+        else:
+            self.encoder = nn.RNN(input_size, hidden_size, batch_first=True)
+
+        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
+        self.out = nn.Linear(hidden_size, input_size)
+
+        # init
+        for name, p in self.encoder.named_parameters():
+            if "weight_hh" in name: nn.init.orthogonal_(p)
+            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
+            elif "bias" in name: nn.init.zeros_(p)
+        for name, p in self.decoder.named_parameters():
+            if "weight_hh" in name: nn.init.orthogonal_(p)
+            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
+            elif "bias" in name: nn.init.zeros_(p)
+    
+    # ----------------------------------------------------------
+    def threshold(self, x):
+        # Hard threshold ReLU
+        return F.relu(x - self.tau)
+    #torch.where(x > self.tau, x, torch.zeros_like(x))
+
+    def forward(self, x, h0=None):
+        if self.layer == 0:
+            if x.dtype in (torch.int64, torch.int32):
+                x_emb = self.embedding(x[:,-1])
+            else:
+                x_emb = x[:,-1]
+            _, h = self.encoder(x_emb, h0)
+        else:
+            _, h = self.encoder(x[:,-1], h0)
+
+        h = self.threshold(h)
+
+        B, T = x.shape[0], x.shape[1]
+        dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
+        outs, h_dec = [], h.unsqueeze(0)
+
+        #print(h_dec, h_dec.shape)
+        for _ in range(T):
+            d, h_dec = self.decoder(dec_in, h_dec)
+            logits = self.out(d)
+            outs.append(logits)
+            dec_in = logits.detach()
+        return torch.cat(outs, dim=1), h
+
+    def encode_step_from_token(self, token_id, h_prev):
+        assert self.layer == 0, "encode_step_from_token only for layer 0"
+        emb = self.embedding(token_id.view(1, 1))
+        _, h_next = self.encoder(emb, h_prev)
+        return h_next
+
+    def encode_step_from_vec(self, x_vec, h_prev):
+        # x_vec must be (1,1,input_size_of_this_layer)
+        _, h_next = self.encoder(x_vec, h_prev)
+        return h_next

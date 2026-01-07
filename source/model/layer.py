@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import itertools
-from .prediction import PredictionFiLM
-from .memory import MemoryVAE
+from .prediction import PredictionFiLM, Prediction
+from .memory import MemoryVAE, Memory
 
 class Layer(nn.Module):
     def __init__(
@@ -32,13 +32,13 @@ class Layer(nn.Module):
         # ---------------------------------------------------------
         #                    MEMORY + PREDICTION
         # ---------------------------------------------------------            
-        self.memory = MemoryVAE(
+        self.memory = Memory(
             self.input_size, self.hidden_size, embedding_dim=embedding_dim, 
             layer=self.layer, tau=tau
         )
         self.prediction = PredictionFiLM(
             self.hidden_size, self.input_size,
-            tau=tau, context_size=self.context_size
+            context_size=self.context_size
         )
 
         # ---------------------------------------------------------
