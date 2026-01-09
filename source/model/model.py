@@ -111,21 +111,20 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         # 6. STATE / EMA BUFFERS
         # ------------------------------------------------------------
-        self.z_states = {}
+        self.h_states = {}
         self.last_pred = {}
         self.h        = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.z_states[l] = torch.zeros(1, 1, H, device=self.device)
-            self.h[l]        = torch.zeros(1, 1, H, device=self.device)
+            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
 
             if l == 0:
                 self.last_pred[l] = torch.zeros(1, 1, self.vocab_size,
                                                 device=self.device)
             else:
                 # initial prediction from zero z_states
-                self.last_pred[l] = self.layers[l].prediction(self.z_states[l], None)
+                self.last_pred[l] = self.layers[l].prediction(self.h_states[l], None)
 
 
 

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import itertools
 from .prediction import PredictionFiLM, Prediction
-from .memory import MemoryVAE, Memory
+from .memory import MemoryContinuous, MemoryVAE, Memory
 
 class Layer(nn.Module):
     def __init__(
@@ -16,7 +16,7 @@ class Layer(nn.Module):
         embedding_dim=None,
         layer=0,
         context_size=0,
-        tau=0.5,
+        tau=0.1,
     ):
         super().__init__()
         self.layer = layer
@@ -32,7 +32,7 @@ class Layer(nn.Module):
         # ---------------------------------------------------------
         #                    MEMORY + PREDICTION
         # ---------------------------------------------------------            
-        self.memory = Memory(
+        self.memory = MemoryContinuous(
             self.input_size, self.hidden_size, embedding_dim=embedding_dim, 
             layer=self.layer, tau=tau
         )
@@ -61,10 +61,10 @@ class Layer(nn.Module):
 
 
     def forward(self, x, h0=None, context=None):
-        logits_reconstruction, z, logvar = self.memory(x, h0)   # mu: (B,H)
-        z_seq = z.unsqueeze(1)                                 # (B,1,H)
-        logits_prediction = self.prediction(z_seq, context)
-        return logits_reconstruction, logits_prediction, z, logvar
+        logits_reconstruction, h = self.memory(x, h0)   # mu: (B,H)
+        h_seq = h.unsqueeze(1)                                 # (B,1,H)
+        logits_prediction = self.prediction(h_seq, context)
+        return logits_reconstruction, logits_prediction, h
     
     @torch.no_grad()
     def generate_sample(self, x=None, h0=None, temperature=1.0):
@@ -117,7 +117,7 @@ class Layer(nn.Module):
             return x_next, z_seq, h_next
     
 
-    def compute_mem_loss(self, logits_rec, x):
+    def compute_mem_loss(self, logits_rec, x, h_current=None, h_prev=None, gamma=1.0):
         """
         Compute memory (reconstruction) loss.
         No optimization step here — pure forward loss.
@@ -141,7 +141,13 @@ class Layer(nn.Module):
             # x: (B,1,H)
             loss = self.loss(logits_rec, x)
 
-        return loss
+        if h_current != None:
+            cont_loss = torch.mean((h_current - h_prev) ** 2)
+        else:
+            cont_loss = 0
+
+        return loss + gamma * cont_loss
+
 
     def compute_pred_loss(self, logits_pred, y):
         """
@@ -166,16 +172,9 @@ class Layer(nn.Module):
         return loss
 
     def train_memory(self, x, h0=None, threshold=1e-4):
-        logits_rec, z, logvar = self.memory(x, h0)
+        logits_rec, h = self.memory(x, h0)
 
-        if self.layer == 0:
-            B, T, V = logits_rec.shape
-            loss = self.loss(
-                logits_rec.reshape(B*T, V),
-                x.reshape(B*T)
-            )
-        else:
-            loss = self.loss(logits_rec, x)
+        loss = self.compute_mem_loss(logits_rec, x, h_current=h, h_prev=h0)
 
         # backprop
         if loss > threshold:
@@ -183,10 +182,10 @@ class Layer(nn.Module):
             loss.backward()
             self.mem_optimizer.step()
 
-        return loss.item(), logits_rec, z.detach(), logvar
+        return loss.item(), logits_rec
     
-    def train_prediction(self, z, y, context=None, threshold=1e-4):
-        logits_pred = self.prediction(z, context)
+    def train_prediction(self, h, y, context=None, threshold=1e-4):
+        logits_pred = self.prediction(h, context)
         #print(logits_pred.shape, z.shape, y.shape)
         if self.layer == 0:
             loss = self.loss(
@@ -204,23 +203,5 @@ class Layer(nn.Module):
 
         return loss.item(), logits_pred.detach()
 
-
-    def train_step(self, x, y, h0=None, context=None, threshold=1e-9):
-        logits_rec, logits_pred, z, logvar = self.forward(x, h0, context)
-
-        # layer-specific loss
-        loss, loss_recon = self.loss(
-            logits_rec,  x,
-            logits_pred, y
-        )
-
-        # backprop
-        if loss > threshold:
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-
-        return loss.item(), loss_recon.item(), logits_rec, logits_pred, z, logvar
-    
 
     

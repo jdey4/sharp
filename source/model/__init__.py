@@ -4,5 +4,5 @@ from .prediction import *
 from .model import *
 
 __all__ = ["Memory", "Prediction", "train_memory_layer",\
-           "MemoryVAE", "PredictionFiLM", "Layer",\
-           "Model"]
+           "MemoryVAE", "MemoryContinuous", "PredictionFiLM",\
+           "Layer", "Model"]
