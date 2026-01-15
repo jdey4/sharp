@@ -16,7 +16,7 @@ class Model(nn.Module):
             hidden_sizes = None,
             embedding_dim_l0 = None,
             short_term_memory = 3,
-            tau = 0.5,
+            tau = 0.1,
             threshold = 1e-4,
             lr_layers = None,
             optimizer_class = optim.Adam,
@@ -28,9 +28,7 @@ class Model(nn.Module):
             setattr(self, k, v)
 
         self.device = torch.device(self.device)
-        if self.optimizer_kwargs is None:
-            self.optimizer_kwargs = {"lr": 1e-3, "weight_decay": 1e-8}
-
+        
         assert self.vocab_size is not None
         assert self.hidden_sizes is not None
         assert self.embedding_dim_l0 is not None
@@ -41,7 +39,7 @@ class Model(nn.Module):
         if self.sleep_steps is None:
             self.sleep_steps = {l: 100 for l in range(1, self.total_layers)}
 
-        self.step = 0
+        self.step = 1
         # ------------------------------------------------------------
         # 4. BUILD LAYERS (with correct context sizes)
         # ------------------------------------------------------------
@@ -54,13 +52,13 @@ class Model(nn.Module):
                 emb = self.embedding_dim_l0
             else:
                 inp = self.hidden_sizes[l-1]
-                emb = None
+                emb = self.embedding_dim_l0
 
             # context from layer l+1:
             #   - prediction dimension  = hidden_sizes[l]
             #   - memory z dim      = hidden_sizes[l+1]
             if l + 1 < self.total_layers:
-                ctx = self.hidden_sizes[l] + self.hidden_sizes[l+1]
+                ctx = self.hidden_sizes[l]
             else:
                 ctx = 0
 
@@ -69,13 +67,14 @@ class Model(nn.Module):
             else:
                 loss_fn = MaskedMSELoss()
 
+
             self.layers.append(
                 Layer(
                     input_size   = inp,
                     hidden_size  = self.hidden_sizes[l],
                     loss_function= loss_fn,
-                    optimizer_class = self.optimizer_class,   # unused in wake
-                    optimizer_kwargs= self.optimizer_kwargs,  # "
+                    optimizer_class = self.optimizer_class,   
+                    optimizer_kwargs= self.optimizer_kwargs, 
                     embedding_dim= emb,
                     layer       = l,
                     context_size= ctx,
@@ -84,47 +83,22 @@ class Model(nn.Module):
             )
 
         # ------------------------------------------------------------
-        # 5. WAKE OPTIMIZER: L0 memory + prediction heads of all layers
-        # ------------------------------------------------------------
-        param_groups = []
-
-        # L0 memory + its prediction head use lr_layers[0]
-        pg0 = {
-            "params": list(self.layers[0].memory.parameters()) +
-                      list(self.layers[0].prediction.parameters()),
-            "lr": self.lr_layers[0],
-        }
-        param_groups.append(pg0)
-
-        # prediction heads for upper layers, each with its own lr_layers[l]
-        for l in range(1, self.total_layers):
-            pg = {
-                "params": list(self.layers[l].prediction.parameters()),
-                "lr": self.lr_layers[l],
-            }
-            param_groups.append(pg)
-
-        # copy other optimizer kwargs except 'lr'
-        opt_kwargs = {k: v for k, v in self.optimizer_kwargs.items() if k != "lr"}
-        self.optimizer_wake = self.optimizer_class(param_groups, **opt_kwargs)
-
-        # ------------------------------------------------------------
-        # 6. STATE / EMA BUFFERS
+        # 5. STATE 
         # ------------------------------------------------------------
         self.h_states = {}
         self.last_pred = {}
-        self.h        = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+            self.h_states[l] = torch.zeros(1, H, device=self.device)
 
             if l == 0:
-                self.last_pred[l] = torch.zeros(1, 1, self.vocab_size,
+                self.last_pred[l] = torch.zeros(1, self.vocab_size,
                                                 device=self.device)
             else:
-                # initial prediction from zero z_states
-                self.last_pred[l] = self.layers[l].prediction(self.h_states[l], None)
+                # initial prediction from zero h_states
+                with torch.no_grad():
+                    self.last_pred[l] = self.layers[l].prediction(self.h_states[l], None)
 
 
 
@@ -137,104 +111,9 @@ class Model(nn.Module):
         print(f"Device: {self.device}")
         print("=================================\n")
 
-    '''def wake_step(self, x, y):
-        """
-        Joint wake update:
-        - L0 memory + prediction are trained every step.
-        - Upper-layer prediction heads are trained when their horizon closes.
-        - Context to each layer l is [pred_{l+1}, z_states_{l+1}] (when l+1 exists).
-        """
-
-        self.step += 1
-        t = self.step
-
-        x = x.to(self.device)
-        y = y.to(self.device)
-
-        # ---------------- LAYER 0 FORWARD ----------------
-        logits_rec0, z0, _ = self.layers[0].memory(x, None)
-
-        if self.total_layers > 1:
-            # pred_1 has dim H0, z_states[1] has dim H1
-            ctx_pred1 = self.last_pred[1].detach()
-            ctx_mem1  = self.z_states[1].detach()
-            #print(ctx_pred1.shape, ctx_mem1.shape)
-            ctx0      = torch.cat([ctx_pred1, ctx_mem1], dim=-1)
-        else:
-            ctx0 = None
-
-        pred0 = self.layers[0].prediction(z0, ctx0)
-
-        loss_mem0  = self.layers[0].compute_mem_loss(logits_rec0, x)
-        loss_pred0 = self.layers[0].compute_pred_loss(pred0, y)
-
-        if loss_mem0>1e-3:
-            total_loss = loss_mem0 + loss_pred0
-        else:
-            total_loss = loss_pred0
-
-
-        # update L0 EMA/state (no grad restriction)
-        self.z_states[0]= z0.unsqueeze(1)
-        self.last_pred[0]= pred0
-
-        # ------------- UPPER-LAYER PREDICTION LOSSES -------------
-        for l in range(1, self.total_layers):
-            stride = self.short_term_memory ** l
-            if t % stride != 0:
-                continue
-
-            target_z = self.z_states[l - 1].detach()   # dim H_{l-1}
-            pred     = self.last_pred[l]            # same dim
-            loss_l   = self.layers[l].compute_pred_loss(pred, target_z)
-            total_loss = total_loss + loss_l
-        
-        # ------------- JOINT BACKWARD + STEP -------------
-        self.optimizer_wake.zero_grad()
-        total_loss.backward()
-        self.optimizer_wake.step()
-
-        # ------------- UPDATE UPPER STATES & NEW PREDICTIONS -------------
-        for l in range(1, self.total_layers):
-            stride = self.short_term_memory ** l
-            if t % stride != 0:
-                continue
-
-            current_z = self.z_states[l - 1].detach()
-
-            # context from ABOVE: [pred_{l+1}, z_states_{l+1}]
-            if l + 1 < self.total_layers:
-                ctx_pred = self.last_pred[l + 1].detach()   # dim H_l
-                ctx_mem  = self.z_states[l + 1].detach()       # dim H_{l+1}
-                ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
-            else:
-                ctx_l = None
-
-            z_l, self.h[l] = self.layers[l].memory.encode_step_from_vec(
-                current_z, self.h[l]
-            )
-            z_l = z_l.detach()      # freeze dynamics
-
-            pred_l = self.layers[l].prediction(z_l, ctx_l)
-            self.last_pred[l] = pred_l
-
-            # update state for layer l
-            self.z_states[l]   = z_l
-
-        return dict(
-            step=t,
-            loss_mem=loss_mem0.item(),
-            loss_pred=loss_pred0.item(),
-            logits_rec0=logits_rec0.detach(),
-            logits_pred0=pred0.detach(),
-        )'''
     
     def wake_step(self, x, y):
         """
-        Joint wake update:
-        - L0 memory + prediction are trained every step.
-        - Upper-layer prediction heads are trained when their horizon closes.
-        - Context to each layer l is [pred_{l+1}, z_states_{l+1}] (when l+1 exists).
         """
 
         self.step += 1
@@ -243,99 +122,60 @@ class Model(nn.Module):
         x = x.to(self.device)
         y = y.to(self.device)
 
-        # ---------------- LAYER 0 FORWARD ----------------
-        logits_rec0, z0 = self.layers[0].memory(x, None)
-        self.z_states[0]   = z0.unsqueeze(1)
         
-
-        for l in range(1, self.total_layers):
+        for l in range(self.total_layers):
             stride = self.short_term_memory ** l
             if t % stride != 0:
                 continue
-
-            current_z = self.z_states[l - 1]
-            self.z_states[l], self.h[l] = self.layers[l].memory.encode_step_from_vec(
-                                    current_z, self.h[l]
-                                )
-
-        for l in reversed(range(self.total_layers)):
-            # context from ABOVE: [pred_{l+1}, z_states_{l+1}]
-            if l + 1 < self.total_layers:
-                ctx_pred = self.last_pred[l + 1]  # dim H_l
-                ctx_mem  = self.z_states[l + 1]      # dim H_{l+1}
-                ctx_l    = torch.cat([ctx_pred, ctx_mem], dim=-1)
+            
+            if l!=self.total_layers-1:
+                cntx = self.last_pred[l+1]
             else:
-                ctx_l = None
+                cntx = None
 
-            pred_l = self.layers[l].prediction(self.z_states[l], ctx_l)
-            self.last_pred[l] = pred_l
+            if l!=0:
+                ### Handle Prediction Blocks ###
+                _, _ = self.layers[l].train_prediction(
+                                        self.h_states[l], self.h_states[l-1], 
+                                        cntx,
+                                        threshold=1e-2
+                                    )
+                
+            ### Handle Memory Blocks ###
+            if l==0:
+                loss_recon, logits_rec0, h = self.layers[0].train_memory(
+                                        x, self.h_states[0],
+                                        threshold=self.threshold
+                                    )
+            else:
+                h = self.layers[l].memory.encode_step_from_vec(
+                                        self.h_states[l-1], self.h_states[l]
+                                    ).detach()
 
-        loss_mem0  = self.layers[0].compute_mem_loss(logits_rec0, x)
-        print(self.last_pred[0][0][0][0],y[0])
-        loss_pred0 = self.layers[0].compute_pred_loss(self.last_pred[0][0][0][0], y[0][0])
+            self.h_states[l] = h
 
-        if loss_mem0>self.threshold:
-            total_loss = loss_mem0 + loss_pred0
-        else:
-            total_loss = loss_pred0
-        
-        
-        # ------------- JOINT BACKWARD + STEP -------------
-        self.optimizer_wake.zero_grad()
-        total_loss.backward()
-        self.optimizer_wake.step()
+            ### Handle Prediction Blocks ###
+            if l == 0:
+                loss_pred, self.last_pred[0] = self.layers[0].train_prediction(
+                                        self.h_states[0], y, 
+                                        cntx
+                                    )
+            else:
+                with torch.no_grad():
+                    self.last_pred[l] = self.layers[l].prediction(
+                                            self.h_states[l], 
+                                            cntx
+                                        )
 
         
         return dict(
             step=t,
-            loss_mem=loss_mem0.item(),
-            loss_pred=loss_pred0.item(),
+            loss_mem=loss_recon,
+            loss_pred=loss_pred,
             logits_rec0=logits_rec0.detach(),
             logits_pred0=self.last_pred[0].detach(),
         )
     
-
-    def sleep_train_layers(
-            self
-    ):
-        self.step = 0 #reset wake step size 
-
-        input_buffer = {}
-        z_states = {}
-
-        for layer in range(self.total_layers-1):
-            H_size = self.layers[layer].hidden_size
-            input_buffer[layer] = deque(
-                [torch.zeros(1, 1, H_size, device=self.device) for _ in range(self.short_term_memory)],
-                maxlen=self.short_term_memory
-            )
-        
-        # Training loop
-        total_steps = self.sleep_steps
-        for t in range(1,total_steps+1):
-            if t == 1:
-                x_next, z, h = self.layers[0].generate_sample()
-            else:
-                x_next, z, h = self.layers[0].generate_sample(x=x_next, h0=h)
-
-            z_states[0] = z.clone()
-
-            for layer in range(1,self.total_layers):
-                if t%self.short_term_memory**layer == 0:
-                    input_buffer[layer-1].append(z_states[layer-1].clone())
-
-                    window = torch.cat(list(input_buffer[layer-1]), dim=1)  # (1, stm, H_lower)
-                    loss, _, _, _ = self.layers[layer].train_memory(
-                                            window, threshold=0.01
-                                        )
-                    
-                    with torch.no_grad():
-                        _, z_, _ = self.layers[layer].memory(window)
-                        z_states[layer] = z_.unsqueeze(1)
-
-            
-
-
 
     # =========================
     # Sleep replay (for a layer-pair)
@@ -412,21 +252,32 @@ class Model(nn.Module):
         train_stride = self.short_term_memory
 
         # Training loop
+        h_ = None
+        target_h = None
         total_steps = self.sleep_steps * train_stride
         for t in range(total_steps):
             if t == 0:
-                x_next, z, h = self.layers[source_layer].generate_sample()
+                x_next, h = self.layers[source_layer].generate_sample()
             else:
-                x_next, z, h = self.layers[source_layer].generate_sample(x=x_next, h0=h)
+                x_next, h = self.layers[source_layer].generate_sample(x=x_next, h0=h)
 
             
             # --- Downsampling / training trigger ---
             if t % train_stride == 0:
-                stm_queue.append(z.clone())
+                if target_h != None:
+                    stm_queue.append(target_h.clone())
+                
+                target_h = h.clone()
+
                 window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-                loss, _, _, _ = self.layers[target_layer].train_memory(
-                                        window, threshold=0.1
+                loss_recon, _, h_ = self.layers[target_layer].train_memory(
+                                        window, h_, threshold=self.threshold/(target_layer+1)
+                                    )
+                
+                _, _ = self.layers[target_layer].train_prediction(
+                                        h_.squeeze(1), target_h.squeeze(1), 
+                                        threshold=1e-2
                                     )
 
-
-        print('Sleeping memory loss ', loss)
+            if t%5000 == 0:
+                print('Sleeping memory loss ', loss_recon, ' at layer ', target_layer)

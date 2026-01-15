@@ -61,10 +61,7 @@ class Layer(nn.Module):
 
 
     def forward(self, x, h0=None, context=None):
-        logits_reconstruction, h = self.memory(x, h0)   # mu: (B,H)
-        h_seq = h.unsqueeze(1)                                 # (B,1,H)
-        logits_prediction = self.prediction(h_seq, context)
-        return logits_reconstruction, logits_prediction, h
+        pass
     
     @torch.no_grad()
     def generate_sample(self, x=None, h0=None, temperature=1.0):
@@ -88,17 +85,17 @@ class Layer(nn.Module):
             
 
             # encode step: get mu_seq (1,1,H) and next hidden (1,1,H)
-            z_seq, h_next = self.memory.encode_step_from_token(x, h0)
+            h_next = self.memory.encode_step_from_token(x, h0)
 
             # context-free prediction over vocab, shape (1,1,vocab)
-            logits = self.prediction(z_seq)
+            logits = self.prediction(h_next)
 
             # sample token from softmax
             logits_flat = logits[:, 0, :] / temperature   # (1,vocab)
             probs = torch.softmax(logits_flat, dim=-1)
             x_next = torch.multinomial(probs, num_samples=1)  # (1,1)
 
-            return x_next, z_seq, h_next
+            return x_next, h_next
 
         # --------------- HIGHER LAYERS: CONTINUOUS -----------------
         else:
@@ -109,12 +106,12 @@ class Layer(nn.Module):
                 if x.dim() == 2:
                     x = x.unsqueeze(1)   # (1,1,input_size)
 
-            z_seq, h_next = self.memory.encode_step_from_vec(x, h0)  # (1,1,H)
+            h_next = self.memory.encode_step_from_vec(x, h0)  # (1,1,H)
 
             # prediction gives next continuous state/vector
-            x_next = self.prediction(z_seq)         # (1,1,input_size)
+            x_next = self.prediction(h_next)         # (1,1,input_size)
 
-            return x_next, z_seq, h_next
+            return x_next, h_next
     
 
     def compute_mem_loss(self, logits_rec, x, h_current=None, h_prev=None, gamma=1.0):
@@ -141,7 +138,7 @@ class Layer(nn.Module):
             # x: (B,1,H)
             loss = self.loss(logits_rec, x)
 
-        if h_current != None:
+        if h_prev is not None:
             cont_loss = torch.mean((h_current - h_prev) ** 2)
         else:
             cont_loss = 0
@@ -171,7 +168,7 @@ class Layer(nn.Module):
 
         return loss
 
-    def train_memory(self, x, h0=None, threshold=1e-4):
+    def train_memory(self, x, h0=None, threshold=1e-3):
         logits_rec, h = self.memory(x, h0)
 
         loss = self.compute_mem_loss(logits_rec, x, h_current=h, h_prev=h0)
@@ -182,9 +179,9 @@ class Layer(nn.Module):
             loss.backward()
             self.mem_optimizer.step()
 
-        return loss.item(), logits_rec
+        return loss.item(), logits_rec, h.detach()
     
-    def train_prediction(self, h, y, context=None, threshold=1e-4):
+    def train_prediction(self, h, y, context=None, threshold=1e-3):
         logits_pred = self.prediction(h, context)
         #print(logits_pred.shape, z.shape, y.shape)
         if self.layer == 0:

@@ -114,20 +114,21 @@ class PredictionFiLM(nn.Module):
 
         # Base linear layers
         self.l1 = nn.Linear(input_size, 2*output_size)
-        self.l2 = nn.Linear(2*output_size, 2*output_size)
-        self.l3 = nn.Linear(2*output_size, output_size)
+        self.l2 = nn.Linear(2*output_size, output_size)
 
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
             self.film = nn.Sequential(
-                nn.Linear(context_size, 2 * input_size),
-                nn.LayerNorm(2 * input_size)
+                nn.Linear(context_size, 2 * context_size),
+                nn.GELU(),
+                nn.Linear(2 * context_size, 2 * input_size)
             )
         else:
             self.film = None
 
         #self.norm1 = nn.LayerNorm(output_size)
 
+    
     # ----------------------------------------------------------
     def forward(self, z, context=None):
         """
@@ -135,21 +136,13 @@ class PredictionFiLM(nn.Module):
         context: (B, T, context_size) or None
         """
 
-        if self.context_size > 0:
-            if context is None:
-                # fall back to zero context
-                context = torch.zeros(
-                    z.size(0), z.size(1), self.context_size,
-                    device=z.device, dtype=z.dtype
-                )
-            # Compute FiLM parameters
+        if self.context_size > 0 and context is not None:
             gamma, beta = self.film(context).chunk(2, dim=-1)
-            # Apply modulation
             z = gamma * z + beta
+        
 
         # Decode through nonlinear readout
         x_ = self.l1(nn.functional.gelu(z))
-        x__ = self.l2(nn.functional.gelu(x_))
-        x = self.l3(nn.functional.gelu(x__))
+        x = self.l2(nn.functional.gelu(x_))
         
         return x

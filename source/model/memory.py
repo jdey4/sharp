@@ -2,6 +2,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ActiveRMSNormGain(nn.Module):
+    def __init__(self, eps=1e-8, init_gain=1.0):
+        super().__init__()
+        self.eps = eps
+        self.log_gain = nn.Parameter(torch.tensor(float(init_gain)).log())
+
+    def forward(self, x):
+        # x: (..., D), sparse (>=0)
+        m = (x > 0).float()
+        denom = (m.sum(dim=-1, keepdim=True).clamp_min(1.0))
+        rms = (x.pow(2).sum(dim=-1, keepdim=True) / denom).add(self.eps).sqrt()
+        return torch.exp(self.log_gain) * x / rms
+
 
 class Memory(nn.Module):
     r"""
@@ -329,7 +342,10 @@ class MemoryContinuous(nn.Module):
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
         else:
-            self.encoder = nn.RNN(input_size, hidden_size, batch_first=True)
+            self.AGC = ActiveRMSNormGain()
+            assert embedding_dim is not None, "embedding_dim required for layer " + str(self.layer)
+            self.embedding = nn.Linear(input_size, embedding_dim)
+            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
 
         self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
         self.out = nn.Linear(hidden_size, input_size)
@@ -351,14 +367,11 @@ class MemoryContinuous(nn.Module):
     #torch.where(x > self.tau, x, torch.zeros_like(x))
 
     def forward(self, x, h0=None):
-        if self.layer == 0:
-            if x.dtype in (torch.int64, torch.int32):
-                x_emb = self.embedding(x[:,-1])
-            else:
-                x_emb = x[:,-1]
-            _, h = self.encoder(x_emb, h0)
-        else:
-            _, h = self.encoder(x[:,-1], h0)
+        if self.layer != 0:
+            x = self.AGC(x)
+
+        x_emb = self.embedding(x[:,-1])
+        _, h = self.encoder(x_emb, h0)
 
         h = self.threshold(h)
 
@@ -370,17 +383,22 @@ class MemoryContinuous(nn.Module):
         for _ in range(T):
             d, h_dec = self.decoder(dec_in, h_dec)
             logits = self.out(d)
+
             outs.append(logits)
             dec_in = logits.detach()
         return torch.cat(outs, dim=1), h
-
+    
+    @torch.no_grad()
     def encode_step_from_token(self, token_id, h_prev):
         assert self.layer == 0, "encode_step_from_token only for layer 0"
         emb = self.embedding(token_id.view(1, 1))
         _, h_next = self.encoder(emb, h_prev)
-        return h_next
+        return self.threshold(h_next)
 
+    @torch.no_grad()
     def encode_step_from_vec(self, x_vec, h_prev):
         # x_vec must be (1,1,input_size_of_this_layer)
-        _, h_next = self.encoder(x_vec, h_prev)
-        return h_next
+        x_vec = self.AGC(x_vec)
+        emb = self.embedding(x_vec)
+        _, h_next = self.encoder(emb, h_prev)
+        return self.threshold(h_next)
