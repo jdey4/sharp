@@ -6,59 +6,90 @@ import random
 from torch.utils.data import Dataset
 from torch import from_numpy as tnsr
 
-def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
+import numpy as np
 
+def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
     if train:
-        choose = int(np.round(n_members*train_percent))
-        random_member = community*n_members + np.random.choice(choose)
+        choose = int(np.round(n_members * train_percent))
+        random_member = community * n_members + np.random.choice(choose)
     else:
-        choose = int(np.round(n_members*train_percent))
-        random_member = community*n_members + choose + np.random.choice(n_members-choose)
-        
-    seq = chr(ord('A')+random_member)
+        choose = int(np.round(n_members * train_percent))
+        random_member = community * n_members + choose + np.random.choice(n_members - choose)
+
+    seq = chr(ord('A') + random_member)
 
     counter = 0
     next_token = random_member
-    while counter < n_members-1:
+    while counter < n_members - 1:
 
         if clockwise:
             next_token += 1
         else:
             next_token -= 1
-  
-        if next_token < community*n_members:
-            next_token = (community+1)*n_members-1
-        elif next_token == (community+1)*n_members:
-            next_token = community*n_members
 
-        seq += chr(ord('A')+next_token)
+        if next_token < community * n_members:
+            next_token = (community + 1) * n_members - 1
+        elif next_token == (community + 1) * n_members:
+            next_token = community * n_members
+
+        seq += chr(ord('A') + next_token)
         counter += 1
-    
-    return seq 
 
-def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.66, random_state=0, return_direction=False):
-    
+    return seq
+
+
+def _direction_from_history(visits, t, K, n_community, mode="hash_parity"):
     """
-    Generate data sequence divided into communities.
+    Determine direction for visit index t using the previous K visits.
 
-    Parameters
-    ----------
-    n_samples : int
-        Total number of tokens to sample.
-    n_community : int
-        Total number of community.
-    n_members : int
-        Total number of members in each community.
-    train : bool, default=true
-        whether generate training or testing sequence.
-    random_state : int, RandomState instance, default=None
-        Determines random number generation for dataset creation. Pass an int
-        for reproducible output across multiple function calls.
+    visits: list[int] of length >= t+1 (communities chosen so far)
+    t: current index into visits
+    K: how many past visits determine direction
+    mode:
+      - "hash_parity": parity of a simple rolling hash over last K visits (harder, scalable)
+      - "sum_parity" : parity of sum(last K visits) (simpler)
+      - "match"      : exact match to a fixed target pattern (very hard, sparse trigger)
+    """
+    if t < K:
+        return True  # default direction for warmup
 
-    Returns
-    -------
-    out : array of shape [n_samples]
-        The generated sequence of tokens.
+    hist = visits[t-K:t]  # length K
+
+    if mode == "sum_parity":
+        # True if even, False if odd
+        return (sum(hist) % 2) == 0
+
+    if mode == "match":
+        # fixed target pattern (deterministic). Change if you want.
+        target = [(i * 7 + 3) % n_community for i in range(K)]
+        return hist == target
+
+    # mode == "hash_parity" (default)
+    # rolling hash -> parity. Uses order, so truly K-step dependency.
+    state = 0
+    for v in hist:
+        state = (state * 1315423911 + (v + 1) * 2654435761) & 0xFFFFFFFF
+    return (state & 1) == 0
+
+
+def get_sequence(
+    n_samples,
+    n_community,
+    n_members,
+    train=True,
+    train_percent=0.66,
+    random_state=0,
+    return_direction=False,
+    context_depth=3,          # <-- NEW: K past visits control direction
+    direction_mode="hash_parity"  # "hash_parity", "sum_parity", or "match"
+):
+    """
+    Generate data sequence divided into communities, with direction determined by
+    the previous `context_depth` community visits.
+
+    Returns a character stream over:
+      - members: 'A'.. (A + n_community*n_members - 1)
+      - separator: token id n_community*n_members (as a char)
     """
 
     if random_state is not None:
@@ -66,31 +97,36 @@ def get_sequence(n_samples, n_community, n_members, train=True, train_percent=0.
 
     visits = []
     direction = []
-    total_community_visit = int(np.ceil(n_samples/n_members))
-    
+    total_community_visit = int(np.ceil(n_samples / n_members))
+
+    # choose community visits
     for ii in range(total_community_visit):
-        visits.append(
-            np.random.choice(n_community)
+        visits.append(np.random.choice(n_community))
+        direction.append(
+            _direction_from_history(
+                visits=visits,
+                t=ii,
+                K=context_depth,
+                n_community=n_community,
+                mode=direction_mode
+            )
         )
 
-        if ii == 0 or ii == 1:
-            direction.append(True)
-        elif visits[-2] == visits[-1] and visits[-3] == visits[-1]:
-            direction.append(False)
-        elif visits[-2] != visits[-1] and visits[-3] == visits[-1]:
-            direction.append(True)
-        elif visits[-2] == visits[-1] and visits[-3] != visits[-1]:
-            direction.append(True)
-        else:
-            direction.append(False)
-
     out = ''
+    sep_char = chr(ord('A') + n_community * n_members)
+
     for ii, community in enumerate(visits):
-        out += _get_member(community, n_members, clockwise=direction[ii], train=train, train_percent=train_percent) + chr(ord('A')+n_community*n_members)
+        out += _get_member(
+            community,
+            n_members,
+            clockwise=direction[ii],
+            train=train,
+            train_percent=train_percent
+        ) + sep_char
 
     if return_direction:
         return out[:n_samples], direction
-    
+
     return out[:n_samples]
         
 

@@ -65,7 +65,8 @@ class Model(nn.Module):
             if l == 0:
                 loss_fn = nn.CrossEntropyLoss()
             else:
-                loss_fn = MaskedMSELoss()
+                loss_fn = nn.MSELoss()
+
 
 
             self.layers.append(
@@ -87,10 +88,12 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         self.h_states = {}
         self.last_pred = {}
+        self.h_pass = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
             self.h_states[l] = torch.zeros(1, H, device=self.device)
+            self.h_pass[l] = None
 
             if l == 0:
                 self.last_pred[l] = torch.zeros(1, self.vocab_size,
@@ -138,13 +141,13 @@ class Model(nn.Module):
                 _, _ = self.layers[l].train_prediction(
                                         self.h_states[l], self.h_states[l-1], 
                                         cntx,
-                                        threshold=1e-2
+                                        threshold=0
                                     )
                 
             ### Handle Memory Blocks ###
             if l==0:
-                loss_recon, logits_rec0, h = self.layers[0].train_memory(
-                                        x, self.h_states[0],
+                loss_recon, logits_rec0, h, self.h_pass[0] = self.layers[0].train_memory(
+                                        x, self.h_pass[0],
                                         threshold=self.threshold
                                     )
             else:
@@ -158,7 +161,7 @@ class Model(nn.Module):
             if l == 0:
                 loss_pred, self.last_pred[0] = self.layers[0].train_prediction(
                                         self.h_states[0], y, 
-                                        cntx
+                                        cntx, threshold=0
                                     )
             else:
                 with torch.no_grad():
@@ -270,14 +273,14 @@ class Model(nn.Module):
                 target_h = h.clone()
 
                 window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-                loss_recon, _, h_ = self.layers[target_layer].train_memory(
-                                        window, h_, threshold=self.threshold/(target_layer+1)
+                loss_recon, _, h_, self.h_pass[target_layer] = self.layers[target_layer].train_memory(
+                                        window, self.h_pass[target_layer], threshold=self.threshold
                                     )
                 
-                _, _ = self.layers[target_layer].train_prediction(
+                '''loss_pred, _ = self.layers[target_layer].train_prediction(
                                         h_.squeeze(1), target_h.squeeze(1), 
-                                        threshold=1e-2
-                                    )
+                                        threshold=self.threshold
+                                    )'''
 
             if t%5000 == 0:
                 print('Sleeping memory loss ', loss_recon, ' at layer ', target_layer)

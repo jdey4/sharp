@@ -119,9 +119,7 @@ class PredictionFiLM(nn.Module):
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
             self.film = nn.Sequential(
-                nn.Linear(context_size, 2 * context_size),
-                nn.GELU(),
-                nn.Linear(2 * context_size, 2 * input_size)
+                nn.Linear(context_size, 2 * input_size)
             )
         else:
             self.film = None

@@ -340,14 +340,14 @@ class MemoryContinuous(nn.Module):
         if layer == 0:
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
-            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
+            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh')
         else:
-            self.AGC = ActiveRMSNormGain()
-            assert embedding_dim is not None, "embedding_dim required for layer " + str(self.layer)
-            self.embedding = nn.Linear(input_size, embedding_dim)
-            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True)
+            #self.AGC = ActiveRMSNormGain()
+            #assert embedding_dim is not None, "embedding_dim required for layer " + str(self.layer)
+            #self.embedding = nn.Linear(input_size, embedding_dim)
+            self.encoder = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='tanh')
 
-        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True)
+        self.decoder = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='tanh')
         self.out = nn.Linear(hidden_size, input_size)
 
         # init
@@ -363,21 +363,30 @@ class MemoryContinuous(nn.Module):
     # ----------------------------------------------------------
     def threshold(self, x):
         # Hard threshold ReLU
-        return F.relu(x - self.tau)
+        return torch.where(x > self.tau, x, torch.zeros_like(x))#F.relu(x - self.tau)
     #torch.where(x > self.tau, x, torch.zeros_like(x))
 
-    def forward(self, x, h0=None):
-        if self.layer != 0:
-            x = self.AGC(x)
-
-        x_emb = self.embedding(x[:,-1])
-        _, h = self.encoder(x_emb, h0)
-
-        h = self.threshold(h)
+    def forward(self, x, h=None):
+        '''if self.layer != 0:
+            x = self.AGC(x)'''
 
         B, T = x.shape[0], x.shape[1]
+
+        if self.layer == 0:
+            x_emb = self.embedding(x)
+        else:
+            x_emb = x
+
+        #print(x_emb.shape)
+        for ii in range(T):
+            _, h = self.encoder(x_emb[:,ii,:], h)
+
+            if ii == 1:
+                h_pass = h   
+
+        
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
-        outs, h_dec = [], h.unsqueeze(0)
+        outs, h_dec = [], h.unsqueeze(1)
 
         #print(h_dec, h_dec.shape)
         for _ in range(T):
@@ -386,19 +395,155 @@ class MemoryContinuous(nn.Module):
 
             outs.append(logits)
             dec_in = logits.detach()
-        return torch.cat(outs, dim=1), h
+        return torch.cat(outs, dim=1), h, h_pass
     
     @torch.no_grad()
     def encode_step_from_token(self, token_id, h_prev):
         assert self.layer == 0, "encode_step_from_token only for layer 0"
         emb = self.embedding(token_id.view(1, 1))
         _, h_next = self.encoder(emb, h_prev)
-        return self.threshold(h_next)
+        return h_next
 
     @torch.no_grad()
     def encode_step_from_vec(self, x_vec, h_prev):
         # x_vec must be (1,1,input_size_of_this_layer)
-        x_vec = self.AGC(x_vec)
-        emb = self.embedding(x_vec)
-        _, h_next = self.encoder(emb, h_prev)
-        return self.threshold(h_next)
+        #x_vec = self.AGC(x_vec)
+        # emb = self.embedding(x_vec)
+        _, h_next = self.encoder(x_vec, h_prev)
+        return h_next
+    
+
+##############################################################################
+class HebbianMemory(nn.Module):
+    """
+    Pure Hebbian memory module.
+
+    u_t = Emb(x_t)                                  (learned)
+    h_t = tanh(u_t + alpha * A @ h_{t-1})           (alpha learned)
+    h_t = TopK_WTA(h_t)                             (optional, signed top-k by |value|)
+    A   = (1-eta) A + eta * (h_{t-1} h_t^T)         (eta constant)
+
+    - No slow recurrent weights
+    - h and A are internal state
+    - h.requires_grad = False
+    - A.requires_grad = False
+    """
+
+    def __init__(
+        self,
+        vocab_size,
+        hidden_size,
+        alpha_init=0.1,
+        eta=0.05,
+        eps=1e-8,
+        layer=0,
+        topk=None,          # <-- add this (e.g., 32). None/0 disables
+        signed_topk=True,   # <-- True = keep top-k by |value| and preserve sign (recommended)
+    ):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.layer = layer
+        self.topk = topk
+        self.signed_topk = signed_topk
+
+        # learned embedding
+        if self.layer == 0:
+            self.embedding = nn.Embedding(vocab_size, hidden_size)
+        else:
+            self.embedding = nn.Linear(vocab_size, hidden_size)
+
+        # learned read-strength
+        self.alpha = nn.Parameter(torch.tensor(alpha_init))
+
+        # constant decay
+        self.eta = torch.tensor(eta, requires_grad=False)
+
+        self.eps = eps
+
+        # internal state (initialized in reset_state)
+        self.h = None
+        self.A = None
+
+    def reset_state(self, batch_size, device=None, dtype=None):
+        if self.layer == 0:
+            device = device or self.embedding.weight.device
+            dtype = dtype or self.embedding.weight.dtype
+        else:
+            device = device or next(self.embedding.parameters()).device
+            dtype = dtype or next(self.embedding.parameters()).dtype
+
+        self.h = torch.zeros(
+            batch_size, self.hidden_size,
+            device=device, dtype=dtype,
+            requires_grad=False
+        )
+
+        self.A = torch.zeros(
+            batch_size, self.hidden_size, self.hidden_size,
+            device=device, dtype=dtype,
+            requires_grad=False
+        )
+
+    def _topk_wta(self, h):
+        """Winner-take-all: keep top-k entries, zero the rest."""
+        if self.topk is None or self.topk <= 0 or self.topk >= h.size(-1):
+            return h
+
+        k = int(self.topk)
+
+        if self.signed_topk:
+            # keep strongest by absolute magnitude, preserve sign
+            idx = torch.topk(h.abs(), k, dim=-1).indices  # (B,k)
+        else:
+            # keep largest positive only (NOT recommended with signed Hebbian)
+            idx = torch.topk(h, k, dim=-1).indices        # (B,k)
+
+        out = torch.zeros_like(h)
+        out.scatter_(dim=-1, index=idx, src=h.gather(-1, idx))
+        return out
+
+    def step(self, x_t):
+        """
+        x_t: (B,) token ids (layer==0) OR (B,vocab_size) vector (layer>0)
+        returns: h_t (B,H)
+        """
+        if self.h is None or self.A is None:
+            self.reset_state(x_t.shape[0], device=x_t.device, dtype=x_t.dtype)
+
+        # learned input representation
+        u_t = self.embedding(x_t)  # (B,H)
+
+        # recurrent Hebbian contribution
+        rec = torch.bmm(self.A, self.h.unsqueeze(-1)).squeeze(-1)
+
+        # state update (grad flows to embedding + alpha)
+        pre = u_t + self.alpha * rec
+        pre = pre / (pre.pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt())
+        h_new = torch.tanh(pre)
+
+        # ---- Top-k Winner-Take-All (added) ----
+        h_new = self._topk_wta(h_new)
+
+        # Hebbian update (no gradients because A,h require_grad=False)
+        self.A = (1.0 - self.eta) * self.A + self.eta * torch.bmm(
+            self.h.unsqueeze(-1),
+            h_new.unsqueeze(1)
+        )
+
+        self.h = h_new.detach()  # ensure state stays non-differentiable
+        return self.h
+
+    def forward(self, x):
+        """
+        x: (B,T) token ids (layer==0) or (B,T,vocab_size) vectors (layer>0)
+        returns: H (B,T,H), h_T (B,H)
+        """
+        B, T = x.shape[0], x.shape[1]
+
+        hs = []
+        for t in range(T):
+            hs.append(self.step(x[:, t]))
+
+        H = torch.stack(hs, dim=1)
+        return H, hs[-1]

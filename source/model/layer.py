@@ -114,7 +114,7 @@ class Layer(nn.Module):
             return x_next, h_next
     
 
-    def compute_mem_loss(self, logits_rec, x, h_current=None, h_prev=None, gamma=1.0):
+    def compute_mem_loss(self, logits_rec, x):
         """
         Compute memory (reconstruction) loss.
         No optimization step here — pure forward loss.
@@ -138,12 +138,8 @@ class Layer(nn.Module):
             # x: (B,1,H)
             loss = self.loss(logits_rec, x)
 
-        if h_prev is not None:
-            cont_loss = torch.mean((h_current - h_prev) ** 2)
-        else:
-            cont_loss = 0
 
-        return loss + gamma * cont_loss
+        return loss 
 
 
     def compute_pred_loss(self, logits_pred, y):
@@ -169,9 +165,9 @@ class Layer(nn.Module):
         return loss
 
     def train_memory(self, x, h0=None, threshold=1e-3):
-        logits_rec, h = self.memory(x, h0)
+        logits_rec, h, h_pass = self.memory(x, h0)
 
-        loss = self.compute_mem_loss(logits_rec, x, h_current=h, h_prev=h0)
+        loss = self.compute_mem_loss(logits_rec, x)
 
         # backprop
         if loss > threshold:
@@ -179,7 +175,7 @@ class Layer(nn.Module):
             loss.backward()
             self.mem_optimizer.step()
 
-        return loss.item(), logits_rec, h.detach()
+        return loss.item(), logits_rec, h.detach(), h_pass.detach()
     
     def train_prediction(self, h, y, context=None, threshold=1e-3):
         logits_pred = self.prediction(h, context)

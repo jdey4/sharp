@@ -18,12 +18,12 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members = 100000000, 2, 7
-total_layers, short_term_memory = 3, 3
+total_samples, n_community, n_members, context_depth = 100000000, 2, 3, 3
+total_layers, short_term_memory = 2, 4
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, train_percent=1.0)
+data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth)
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,11 +38,11 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 120, 180],    # H0, H1, H2
+    hidden_sizes = [60, 120],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
-    lr_layers = [1e-4, 1e-4, 1e-4],   
+    lr_layers = [1e-4, 1e-4],   
 
     # ---- Optimizer type (user can choose) ----
     optimizer_class = torch.optim.Adam,
@@ -56,7 +56,7 @@ model = Model(
 
     # ---- Misc ----
     tau = 0.1,
-    threshold = 1e-1,
+    threshold = 1e-2,
     device = device
 )
 
