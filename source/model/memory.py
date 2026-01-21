@@ -433,8 +433,8 @@ class HebbianMemory(nn.Module):
         self,
         vocab_size,
         hidden_size,
-        alpha_init=0.1,
-        eta=0.05,
+        alpha_init=0.6,
+        eta=0.01,
         eps=1e-8,
         layer=0,
         topk=None,          # <-- add this (e.g., 32). None/0 disables
@@ -465,13 +465,15 @@ class HebbianMemory(nn.Module):
         self.h = None
         self.A = None
 
+
     def reset_state(self, batch_size, device=None, dtype=None):
-        if self.layer == 0:
-            device = device or self.embedding.weight.device
-            dtype = dtype or self.embedding.weight.dtype
-        else:
-            device = device or next(self.embedding.parameters()).device
-            dtype = dtype or next(self.embedding.parameters()).dtype
+        # Always keep state in floating dtype
+        device = device or (self.embedding.weight.device if self.layer == 0
+                            else next(self.embedding.parameters()).device)
+
+        # Use embedding dtype (float), NOT token dtype (long)
+        if dtype is None:
+            dtype = self.embedding.weight.dtype if self.layer == 0 else next(self.embedding.parameters()).dtype
 
         self.h = torch.zeros(
             batch_size, self.hidden_size,
@@ -509,7 +511,7 @@ class HebbianMemory(nn.Module):
         returns: h_t (B,H)
         """
         if self.h is None or self.A is None:
-            self.reset_state(x_t.shape[0], device=x_t.device, dtype=x_t.dtype)
+            self.reset_state(x_t.shape[0], device=x_t.device)  
 
         # learned input representation
         u_t = self.embedding(x_t)  # (B,H)
