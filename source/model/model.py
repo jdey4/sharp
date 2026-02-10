@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 from torch import optim
-from collections import deque
-from .layer import Layer  
-from ..utils.loss import CrossEntropyLayerLoss, MSELayerLoss, MaskedMSELoss
+from collections import deque 
+from .prediction import PredictionFiLM
+from .memory import Memory
 
 
 class Model(nn.Module):
@@ -16,9 +16,7 @@ class Model(nn.Module):
             hidden_sizes = None,
             embedding_dim_l0 = None,
             short_term_memory = 3,
-            tau = 0.1,
-            threshold = 1e-4,
-            lr_layers = None,
+            lr_layers = 1e-3,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
             sleep_steps = None,
@@ -34,75 +32,63 @@ class Model(nn.Module):
         assert self.embedding_dim_l0 is not None
         assert self.lr_layers is not None
         assert len(self.hidden_sizes) == self.total_layers
-        assert len(self.lr_layers) == self.total_layers
 
         if self.sleep_steps is None:
             self.sleep_steps = {l: 100 for l in range(1, self.total_layers)}
 
         self.step = 1
         # ------------------------------------------------------------
-        # 4. BUILD LAYERS (with correct context sizes)
+        # 1. BUILD LAYERS (with correct context sizes)
         # ------------------------------------------------------------
-        self.layers = nn.ModuleList()
+        self.memories = nn.ModuleList()
+        self.heads = nn.ModuleList()
 
         for l in range(self.total_layers):
+            output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
 
-            if l == 0:
-                inp = self.vocab_size
-                emb = self.embedding_dim_l0
-            else:
-                inp = self.hidden_sizes[l-1]
-                emb = self.embedding_dim_l0
+            self.heads.append(
+                PredictionFiLM(
+                    self.hidden_sizes[l],
+                    output_size,
+                    context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+                )
+            )
 
-            # context from layer l+1:
-            #   - prediction dimension  = hidden_sizes[l]
-            #   - memory z dim      = hidden_sizes[l+1]
-            if l + 1 < self.total_layers:
-                ctx = self.hidden_sizes[l]
-            else:
-                ctx = 0
-
-            if l == 0:
-                loss_fn = nn.CrossEntropyLoss()
-            else:
-                loss_fn = nn.MSELoss()
-
-
-
-            self.layers.append(
-                Layer(
-                    input_size   = inp,
-                    hidden_size  = self.hidden_sizes[l],
-                    loss_function= loss_fn,
-                    optimizer_class = self.optimizer_class,   
-                    optimizer_kwargs= self.optimizer_kwargs, 
-                    embedding_dim= emb,
-                    layer       = l,
-                    context_size= ctx,
-                    tau         = self.tau,
-                ).to(self.device)
+            input_size = self.vocab_size if l == 0 else self.hidden_sizes[l-1]
+            self.memories.append(
+                Memory(
+                    input_size=input_size,
+                    hidden_size=self.hidden_sizes[l],
+                    embedding_dim=self.embedding_dim_l0,
+                    layer=l
+                )
             )
 
         # ------------------------------------------------------------
-        # 5. STATE 
+        # 2. Define optmizers and loss function 
+        # ------------------------------------------------------------
+        self.wake = False
+
+        params = []
+        # train layer0 memory
+        params += list(self.memories[0].parameters())
+        # train all heads
+        for head in self.heads:
+            params += list(head.parameters())
+
+        opt_kwargs = self.optimizer_kwargs 
+        self.wake_opt = self.optimizer_class(params, lr=self.lr_layers, **opt_kwargs)
+
+
+        # ------------------------------------------------------------
+        # 3. STATE 
         # ------------------------------------------------------------
         self.h_states = {}
-        self.last_pred = {}
-        self.h_pass = {}
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, H, device=self.device)
-            self.h_pass[l] = None
-
-            if l == 0:
-                self.last_pred[l] = torch.zeros(1, self.vocab_size,
-                                                device=self.device)
-            else:
-                # initial prediction from zero h_states
-                with torch.no_grad():
-                    self.last_pred[l] = self.layers[l].prediction(self.h_states[l], None)
-
+            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+            
 
 
     # ===================================================================
@@ -114,173 +100,208 @@ class Model(nn.Module):
         print(f"Device: {self.device}")
         print("=================================\n")
 
+    def _freeze_memories(self, start_layer: int = 0):
+        for l in range(start_layer, self.total_layers):
+            for p in self.memories[l].parameters():
+                p.requires_grad_(False)
+
+    def _unfreeze_memory(self, layer: int = 0):
+        for p in self.memories[layer].parameters():
+            p.requires_grad_(True)
+
+    def _freeze_heads(self):
+        for l in range(self.total_layers):
+            for p in self.heads[l].parameters():
+                p.requires_grad_(False)
     
-    def wake_step(self, x, y):
+    def _unfreeze_heads(self):
+        for l in range(self.total_layers):
+            for p in self.heads[l].parameters():
+                p.requires_grad_(True)
+
+
+    def wake_step(self, x, y, h_=None):
         """
         """
+        if self.wake is False:
+            self.step = 0
+
+            for l in range(self.total_layers):
+                H = self.hidden_sizes[l]
+                self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+                
+            self._freeze_memories(start_layer=0)
+            self._unfreeze_memory(layer=0)
+            self._unfreeze_heads()
+            self.wake = True
 
         self.step += 1
         t = self.step
 
         x = x.to(self.device)
-        y = y.to(self.device)
+        y = y.view(-1).long().to(self.device)
 
         
-        for l in range(self.total_layers):
-            stride = self.short_term_memory ** l
-            if t % stride != 0:
-                continue
-            
-            if l!=self.total_layers-1:
-                cntx = self.last_pred[l+1]
-            else:
-                cntx = None
+        # ------------------------------------------------
+        # Bottom-up memory updates
+        # ------------------------------------------------
+        # Layer 0 (trainable)
+        h0, h_ = self.memories[0](x, h_)
+        self.h_states[0] = h0
 
-            if l!=0:
-                ### Handle Prediction Blocks ###
-                _, _ = self.layers[l].train_prediction(
-                                        self.h_states[l], self.h_states[l-1], 
-                                        cntx,
-                                        threshold=0
-                                    )
-                
-            ### Handle Memory Blocks ###
-            if l==0:
-                loss_recon, logits_rec0, h, self.h_pass[0] = self.layers[0].train_memory(
-                                        x, self.h_pass[0],
-                                        threshold=self.threshold
-                                    )
-            else:
-                h = self.layers[l].memory.encode_step_from_vec(
-                                        self.h_states[l-1], self.h_states[l]
-                                    ).detach()
+        # Upper layers (frozen weights, state only)
+        with torch.no_grad():
+            for l in range(1, self.total_layers):
+                stride = self.short_term_memory ** l
+                if t % stride != 0:
+                    continue
 
-            self.h_states[l] = h
+                x_vec = self.h_states[l-1].transpose(0, 1)  # (B,1,H_{l-1})
+                self.h_states[l] = self.memories[l].encode_step_from_vec(
+                    x_vec, self.h_states[l]
+                )
+        # ------------------------------------------------
+        # Top-down context construction via heads
+        # ------------------------------------------------
+        context = None
+        for l in reversed(range(self.total_layers)):
+            z = self.h_states[l].transpose(0, 1)  # (B,1,H_l)
 
-            ### Handle Prediction Blocks ###
             if l == 0:
-                loss_pred, self.last_pred[0] = self.layers[0].train_prediction(
-                                        self.h_states[0], y, 
-                                        cntx, threshold=0
-                                    )
+                # final prediction head
+                logits = self.heads[0](z, context=context)  # (B,1,V)
             else:
-                with torch.no_grad():
-                    self.last_pred[l] = self.layers[l].prediction(
-                                            self.h_states[l], 
-                                            cntx
-                                        )
+                # produce context for lower layer
+                context = self.heads[l](z, context=context)  # (B,1,H_{l-1})
 
-        
-        return dict(
-            step=t,
-            loss_mem=loss_recon,
-            loss_pred=loss_pred,
-            logits_rec0=logits_rec0.detach(),
-            logits_pred0=self.last_pred[0].detach(),
-        )
-    
+        logits = logits.squeeze(1)  # (B,V)
 
-    # =========================
-    # Sleep replay (for a layer-pair)
-    # =========================
-    def sleep_train_layer(
-        self, target_layer
-    ):
-        r"""
-            Sleep-phase replay for hierarchical consolidation in the model.
+        # ------------------------------------------------
+        # Global loss (ONLY one)
+        # ------------------------------------------------
+        loss = nn.functional.cross_entropy(logits, y)
 
-            This function trains ONLY the specified `target_layer` using replayed
-            latent trajectories generated from the *lower* layer (target_layer - 1),
-            analogous to hippocampus-cortex consolidation in the brain.
+        self.wake_opt.zero_grad(set_to_none=True)
+        loss.backward()
+        self.wake_opt.step()
 
-            ─────────────────────────────────────────────────────────────
-            BIOLOGICAL ANALOGY
-            ─────────────────────────────────────────────────────────────
-            - Source layer (L-1): acts like the hippocampus → generates replayed activity.
-            - Target layer (L): acts like cortex → slowly learns stable representations.
-            - Replay z-trajectories: hippocampal reactivation during NREM sleep.
-            - No gradient flows to lower layers (hippocampus is a teacher, not a student).
-            - Each layer has its own local optimizer (no global backprop).
-            
-            ─────────────────────────────────────────────────────────────
-            WHAT THE FUNCTION DOES
-            ─────────────────────────────────────────────────────────────
-            1. Select source layer S = target_layer - 1.
-            2. Generate synthetic replay from S using:
-                x_next, z_S, h_S = generate_sample(...)
-            where z_S is the variational latent code sampled from q(z|x).
-            3. Smooth the replayed z_S over time using exponential moving average (EMA).
-            4. Store a sliding window of the last `short_term_memory` z vectors.
-            5. Every `short_term_memory` steps, train the target layer on:
-                input  = stacked window
-                target = most recent z
-            6. Because each layer has its own optimizer, only the target layer learns.
-            Lower layers remain frozen automatically.
+        return logits.detach(), loss.item(), h_.detach()
 
-            ─────────────────────────────────────────────────────────────
-            ARGUMENTS
-            ─────────────────────────────────────────────────────────────
-            target_layer : int
-                Index of the layer to train during sleep.
-                The source layer is (target_layer - 1).
 
-            
-            ─────────────────────────────────────────────────────────────
-            RETURNS
-            ─────────────────────────────────────────────────────────────
-            None
-                Prints final sleep replay loss for the target layer.
 
-            ─────────────────────────────────────────────────────────────
-            KEY PROPERTIES OF THIS IMPLEMENTATION
-            ─────────────────────────────────────────────────────────────
-            - Uses z (sampled variational latent) as replay representation.
-            - Replay is context-free → matches hippocampal spontaneous replay.
-            - Lower layers never receive gradients (natural freezing).
-            - Upper layers learn stable long-timescale patterns.
-            - Windowing produces temporal receptive fields (place-field-like tuning).
+    @torch.no_grad()
+    def _teacher_step_layer0(self, token, h0_carry, temperature=1.0):
         """
-        self.step = 0 #reset wake step size
+        One teacher tick for layer0: token -> memory0 -> logits (context-free) -> next token.
+        Returns: h0 (1,B,H0) detached, next_token (B,), updated carry
+        """
+        B = token.size(0)
+        x = token.view(B, 1)  # (B,1)
+        h0_carry = self.memories[0].encode_step_from_token(x, h0_carry)  
 
-        source_layer = target_layer - 1
+        z0 = h0_carry.transpose(0, 1)  # (B,1,H0)
+        logits = self.heads[0](z0, context=None).squeeze(1)  # (B,V)
+        next_token = _sample_next_token(logits, temperature=temperature)
+
+        return h0_carry, next_token
+
+    @torch.no_grad()
+    def _teacher_step_higher(self, teacher_layer, x_vec, h_teacher):
+        """
+        Teacher tick for layer>=1:
+        input vec (B,1,H_{teacher-1}) -> memory[teacher_layer] -> h_teacher (1,B,H_teacher)
+        then generate next input vec using frozen head[teacher_layer] context-free:
+            x_vec_next = head[teacher_layer](h_teacher)  (B,1,H_{teacher-1})
+        Returns: h_teacher_detached (1,B,H_teacher), x_vec_next_detached (B,1,H_{teacher-1}), h_teacher
+        """
+        h_teacher = self.memories[teacher_layer].encode_step_from_vec(x_vec, h_teacher)  # (1,B,Ht)
+        z = h_teacher.transpose(0, 1)  # (B,1,Ht)
+        x_vec_next = self.heads[teacher_layer](z, context=None)  # (B,1,H_{t-1})
+        return h_teacher, x_vec_next
+        
 
 
-        # Initialize buffers
-        H_lower = self.layers[source_layer].hidden_size
-        stm_queue = deque(
+
+    def sleep(self, target_layer=1, total_steps=3000):
+        if self.wake is True:
+            self.wake = False
+
+        self._freeze_memories(start_layer=0)
+        self._unfreeze_memory(target_layer)
+        self._freeze_heads()
+        opt_kwargs = self.optimizer_kwargs 
+        self.sleep_opt = self.optimizer_class(
+                self.memories[target_layer].parameters(), lr=self.lr_layers, **opt_kwargs
+            )
+        loss_func = nn.MSELoss()
+
+        H_lower = self.hidden_sizes[target_layer-1]
+        input_buffer = deque(
             [torch.zeros(1, 1, H_lower, device=self.device) for _ in range(self.short_term_memory)],
             maxlen=self.short_term_memory
         )
-
-        train_stride = self.short_term_memory
-
-        # Training loop
+        
+        h = None
         h_ = None
-        target_h = None
-        total_steps = self.sleep_steps * train_stride
-        for t in range(total_steps):
-            if t == 0:
-                x_next, h = self.layers[source_layer].generate_sample()
+        if target_layer == 1:
+            x = torch.tensor(0).view(1,1)
+        else:
+            x = torch.zeros(1,1,self.hidden_sizes[target_layer-1])
+
+        for ii in range(total_steps):
+            if target_layer==1:
+                h, x = self._teacher_step_layer0(x, h)
             else:
-                x_next, h = self.layers[source_layer].generate_sample(x=x_next, h0=h)
-
+                h, x = self._teacher_step_higher(target_layer-1,x,h)
             
-            # --- Downsampling / training trigger ---
-            if t % train_stride == 0:
-                if target_h != None:
-                    stm_queue.append(target_h.clone())
-                
-                target_h = h.clone()
+            if ii%self.short_term_memory != 0:
+                continue
+            
+            input = torch.cat(list(input_buffer), dim=1)
 
-                window = torch.cat(list(stm_queue), dim=1)  # (1, stm, H_lower)
-                loss_recon, _, h_, self.h_pass[target_layer] = self.layers[target_layer].train_memory(
-                                        window, self.h_pass[target_layer], threshold=self.threshold
-                                    )
-                
-                '''loss_pred, _ = self.layers[target_layer].train_prediction(
-                                        h_.squeeze(1), target_h.squeeze(1), 
-                                        threshold=self.threshold
-                                    )'''
+            h0, h_ = self.memories[target_layer](input, h_)
+            self.h_states[target_layer] = h0
 
-            if t%5000 == 0:
-                print('Sleeping memory loss ', loss_recon, ' at layer ', target_layer)
+            # Upper layers (frozen weights, state only)
+            with torch.no_grad():
+                for l in range(target_layer+1, self.total_layers):
+                    stride = self.short_term_memory ** l
+                    if ii % stride != 0:
+                        continue
+
+                    x_vec = self.h_states[l-1].transpose(0, 1)  # (B,1,H_{l-1})
+                    self.h_states[l] = self.memories[l].encode_step_from_vec(
+                        x_vec, self.h_states[l]
+                    )
+            # ------------------------------------------------
+            # Top-down context construction via heads
+            # ------------------------------------------------
+            context = None
+            for l in reversed(range(target_layer, self.total_layers)):
+                z = self.h_states[l].transpose(0, 1)  # (B,1,H_l)
+
+                
+                context = self.heads[l](z, context=context)  # (B,1,H_{l-1})
+
+            #logits = context.squeeze(1)  # (B,V)
+
+            # ------------------------------------------------
+            # Global loss (ONLY one)
+            # ------------------------------------------------
+            loss = loss_func(context, h)
+
+            self.sleep_opt.zero_grad(set_to_none=True)
+            loss.backward()
+            self.sleep_opt.step()
+
+            input_buffer.append(h)
+
+        print("Final MSE loss ", loss.item())
+
+                
+@torch.no_grad()
+def _sample_next_token(logits, temperature=1.0):
+    if temperature != 1.0:
+        logits = logits / max(temperature, 1e-8)
+    probs = torch.softmax(logits, dim=-1)
+    return torch.multinomial(probs, 1).squeeze(-1)  # (B,)               

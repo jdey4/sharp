@@ -18,8 +18,8 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members, context_depth = 100000000, 2, 3, 3
-total_layers, short_term_memory = 2, 4
+total_samples, n_community, n_members, context_depth = 10000000, 2, 3, 5
+total_layers, short_term_memory = 3, 3
 
 vocab_size = n_community * n_members + 1
 
@@ -38,11 +38,11 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 120],    # H0, H1, H2
+    hidden_sizes = [60, 100, 120],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
-    lr_layers = [1e-4, 1e-4],   
+    lr_layers = 1e-4,   
 
     # ---- Optimizer type (user can choose) ----
     optimizer_class = torch.optim.Adam,
@@ -55,36 +55,31 @@ model = Model(
     sleep_steps = 10000,   # layer 2 is the top
 
     # ---- Misc ----
-    tau = 0.1,
-    threshold = 1e-2,
     device = device
 )
 
 model.summary()
 
 #%%
+h_ = None
 ii = 0 
 correct_ring = np.zeros(1000)
 for x, y in loader:
     #loss, _, _, _, _ = model.layers[0].train_step(x,y)
-    loss = model.wake_step(x,y)
+    logits, loss, h_ = model.wake_step(x, y, h_)
 
 
     with torch.no_grad():
         ii += 1
-        pred_tok = loss['logits_pred0'].argmax(dim=-1)
+        pred_tok = logits.argmax(dim=-1)
         correct_ring[ii % 1000] = (pred_tok[0] == y[0, 0]).item()
         
         if ii%1000 == 0:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
-            print("Iter ", ii, "prediction loss: ", loss['loss_pred'], "memory loss: ", loss['loss_mem'], "Acc: ", acc)
+            print("Iter ", ii, "prediction loss: ", loss, "Acc: ", acc)
 
-    if ii % sleep_interval_wake == 0:
-        print("Entering sleep ...")
-        
-        for layer in range(1, model.total_layers):
-            model.sleep_train_layer(
-                        target_layer=layer
-                )
+
+    # if ii%10000==0:
+    #     model.sleep(target_layer=1, total_steps=10000)
 
  # %%
