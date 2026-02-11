@@ -222,81 +222,112 @@ class Model(nn.Module):
 
 
 
-    def sleep(self, target_layer=1, total_steps=3000):
+    def sleep(self, target_layer=1, total_steps=3000, temperature=1.0):
+        """
+        Sleep trains memories[target_layer] (plus a temporary linear head) to predict the
+        NEXT subsampled lower-layer hidden state from the past K subsampled lower-layer states.
+
+        Subsampling:
+        delta = short_term_memory ** (target_layer - 1)
+        We only take one teacher state every `delta` teacher ticks.
+        The student sees a stream on that coarser clock.
+        """
         if self.wake is True:
             self.wake = False
 
+        # ----------------------------
+        # Freeze everything except target memory
+        # ----------------------------
         self._freeze_memories(start_layer=0)
         self._unfreeze_memory(target_layer)
         self._freeze_heads()
-        opt_kwargs = self.optimizer_kwargs 
-        self.sleep_opt = self.optimizer_class(
-                self.memories[target_layer].parameters(), lr=self.lr_layers, **opt_kwargs
-            )
+
+        K = self.short_term_memory
+        H_lower  = self.hidden_sizes[target_layer - 1]
+        H_target = self.hidden_sizes[target_layer]
+
+        # TRUE subsampling stride for the lower stream that drives this layer
+        delta = self.short_term_memory ** (target_layer)  # layer1=1, layer2=K, layer3=K^2, ...
+        # (If you want a different definition, change it here.)
+
+        # ----------------------------
+        # Temporary linear head (sleep-only)
+        # ----------------------------
+        tmp_head = nn.Linear(H_target, H_lower).to(self.device)
+
+        opt_kwargs = self.optimizer_kwargs or {}
+        sleep_opt = self.optimizer_class(
+            list(self.memories[target_layer].parameters()) + list(tmp_head.parameters()),
+            lr=self.lr_layers,
+            **opt_kwargs
+        )
         loss_func = nn.MSELoss()
 
-        H_lower = self.hidden_sizes[target_layer-1]
-        input_buffer = deque(
-            [torch.zeros(1, 1, H_lower, device=self.device) for _ in range(self.short_term_memory)],
-            maxlen=self.short_term_memory
+        # buffer on the SUBSAMPLED stream: K past + 1 next target
+        buf = deque(
+            [torch.zeros(1, 1, H_lower, device=self.device) for _ in range(K + 1)],
+            maxlen=K + 1
         )
-        
-        h = None
-        h_ = None
+
+        # ----------------------------
+        # Teacher init
+        # ----------------------------
+        h_teacher = None
         if target_layer == 1:
-            x = torch.tensor(0).view(1,1)
+            x = torch.tensor(0, device=self.device).view(1, 1)  # token
         else:
-            x = torch.zeros(1,1,self.hidden_sizes[target_layer-1])
+            x = torch.zeros(1, 1, H_lower, device=self.device)  # lower vec stream
 
-        for ii in range(total_steps):
-            if target_layer==1:
-                h, x = self._teacher_step_layer0(x, h)
+        # student carry for target memory (TBPTT)
+        h_ = None
+        last_loss = None
+
+        # We interpret total_steps as TEACHER ticks.
+        # Student updates happen only when we have a new subsampled state (every delta ticks).
+        for tick in range(total_steps):
+            # ---- teacher tick (no grad inside these methods) ----
+            if target_layer == 1:
+                h_teacher, x = self._teacher_step_layer0(x, h_teacher, temperature=temperature)  # (1,1,H0)
             else:
-                h, x = self._teacher_step_higher(target_layer-1,x,h)
-            
-            if ii%self.short_term_memory != 0:
+                h_teacher, x = self._teacher_step_higher(target_layer - 1, x, h_teacher)         # (1,1,H_{l-1})
+
+            # ---- subsample: only keep every delta-th teacher state ----
+            if (tick % delta) != 0:
                 continue
-            
-            input = torch.cat(list(input_buffer), dim=1)
 
-            h0, h_ = self.memories[target_layer](input, h_)
-            self.h_states[target_layer] = h0
+            # push subsampled teacher state
+            buf.append(h_teacher)  # detached already
 
-            # Upper layers (frozen weights, state only)
-            with torch.no_grad():
-                for l in range(target_layer+1, self.total_layers):
-                    stride = self.short_term_memory ** l
-                    if ii % stride != 0:
-                        continue
+            # need a full window to train
+            if len(buf) < (K + 1):
+                continue
 
-                    x_vec = self.h_states[l-1].transpose(0, 1)  # (B,1,H_{l-1})
-                    self.h_states[l] = self.memories[l].encode_step_from_vec(
-                        x_vec, self.h_states[l]
-                    )
-            # ------------------------------------------------
-            # Top-down context construction via heads
-            # ------------------------------------------------
-            context = None
-            for l in reversed(range(target_layer, self.total_layers)):
-                z = self.h_states[l].transpose(0, 1)  # (B,1,H_l)
+            # ---- build training pair on subsampled clock ----
+            past_seq = torch.cat(list(buf)[:K], dim=1)   # (1, K, H_lower)
+            target_next = list(buf)[-1].detach()         # (1, 1, H_lower)
 
-                
-                context = self.heads[l](z, context=context)  # (B,1,H_{l-1})
+            # ---- student forward (grad-enabled) ----
+            if h_ is not None:
+                h_ = h_.detach()  # fixed TBPTT truncation each update (or do every K updates if you want)
 
-            #logits = context.squeeze(1)  # (B,V)
+            h_t, h_ = self.memories[target_layer](past_seq, h_)  # h_t: (1,1,H_target)
 
-            # ------------------------------------------------
-            # Global loss (ONLY one)
-            # ------------------------------------------------
-            loss = loss_func(context, h)
+            # decode next lower hidden using temporary linear head
+            pred_next = tmp_head(h_t.transpose(0, 1).squeeze(1))  # (B,H_lower) with B=1
+            pred_next = pred_next.view(1, 1, H_lower)             # (1,1,H_lower)
 
-            self.sleep_opt.zero_grad(set_to_none=True)
+            loss = loss_func(pred_next, target_next)
+            last_loss = loss
+
+            sleep_opt.zero_grad(set_to_none=True)
             loss.backward()
-            self.sleep_opt.step()
+            sleep_opt.step()
 
-            input_buffer.append(h)
+        if last_loss is not None:
+            print(f"[sleep] layer={target_layer} delta={delta} final MSE={float(last_loss.item()):.6f}")
+        else:
+            print(f"[sleep] layer={target_layer} delta={delta} no updates ran")
 
-        print("Final MSE loss ", loss.item())
 
                 
 @torch.no_grad()

@@ -18,12 +18,12 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members, context_depth = 10000000, 2, 3, 5
-total_layers, short_term_memory = 3, 3
+total_samples, n_community, n_members, context_depth = 10000000, 2, 3, 4
+total_layers, short_term_memory = 2, 4
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth)
+data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, direction_mode="sum_parity")
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 100, 120],    # H0, H1, H2
+    hidden_sizes = [60, 120],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -80,6 +80,6 @@ for x, y in loader:
 
 
     # if ii%10000==0:
-    #     model.sleep(target_layer=1, total_steps=10000)
+    #     model.sleep(target_layer=1, total_steps=1000)
 
  # %%
