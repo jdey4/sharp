@@ -18,7 +18,7 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members, context_depth = 10000000, 2, 3, 4
+total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 3
 total_layers, short_term_memory = 2, 4
 
 vocab_size = n_community * n_members + 1
@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 120],    # H0, H1, H2
+    hidden_sizes = [120, 240],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -74,12 +74,12 @@ for x, y in loader:
         pred_tok = logits.argmax(dim=-1)
         correct_ring[ii % 1000] = (pred_tok[0] == y[0, 0]).item()
         
-        if ii%1000 == 0:
+        if ii%1001 == 0:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
-            print("Iter ", ii, "prediction loss: ", loss, "Acc: ", acc)
+            print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
 
 
-    # if ii%10000==0:
-    #     model.sleep(target_layer=1, total_steps=1000)
+    if ii%10000==0:
+        model.sleep(target_layer=1, total_steps=10000)
 
  # %%

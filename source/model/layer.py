@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import itertools
-from .prediction import PredictionFiLM, Prediction
-from .memory import MemoryContinuous, MemoryVAE, Memory
+from .prediction import PredictionFiLM
+from .memory import Memory
 
 class Layer(nn.Module):
     def __init__(
@@ -16,7 +16,6 @@ class Layer(nn.Module):
         embedding_dim=None,
         layer=0,
         context_size=0,
-        tau=0.1,
     ):
         super().__init__()
         self.layer = layer
@@ -32,9 +31,9 @@ class Layer(nn.Module):
         # ---------------------------------------------------------
         #                    MEMORY + PREDICTION
         # ---------------------------------------------------------            
-        self.memory = MemoryContinuous(
+        self.memory = Memory(
             self.input_size, self.hidden_size, embedding_dim=embedding_dim, 
-            layer=self.layer, tau=tau
+            layer=self.layer
         )
         self.prediction = PredictionFiLM(
             self.hidden_size, self.input_size,
@@ -45,13 +44,6 @@ class Layer(nn.Module):
         #                    OPTIMIZER
         # ---------------------------------------------------------
 
-        self.mem_optimizer = optimizer_class(
-            self.memory.parameters(), **optimizer_kwargs
-            )
-        self.pred_optimizer = optimizer_class(
-            self.prediction.parameters(), **optimizer_kwargs
-            )
-        # One optimizer that updates BOTH memory + prediction
         all_params = itertools.chain(
             self.memory.parameters(),
             self.prediction.parameters()
@@ -60,8 +52,27 @@ class Layer(nn.Module):
         self.optimizer = optimizer_class(all_params, **optimizer_kwargs)
 
 
+    def freeze(self):
+        for p in self.memory.parameters():
+                p.requires_grad_(False)
+        
+        for p in self.prediction.parameters():
+                p.requires_grad_(False)
+    
+    def unfreeze(self):
+        for p in self.memory.parameters():
+                p.requires_grad_(True)
+        
+        for p in self.prediction.parameters():
+                p.requires_grad_(True)
+
+
+
     def forward(self, x, h0=None, context=None):
-        pass
+        h, h_pass = self.memory(x, h0)
+        logits = self.prediction(h, context=context)
+
+        return logits, h, h_pass
     
     @torch.no_grad()
     def generate_sample(self, x=None, h0=None, temperature=1.0):
@@ -114,34 +125,6 @@ class Layer(nn.Module):
             return x_next, h_next
     
 
-    def compute_mem_loss(self, logits_rec, x):
-        """
-        Compute memory (reconstruction) loss.
-        No optimization step here — pure forward loss.
-        """
-
-        # ---- LAYER 0: Cross entropy over vocabulary ----
-        if self.layer == 0:
-            # logits_rec: (B,1,V) or (B,T,V)
-            # x: (B,1) or (B,T)
-
-            # Flatten to (B*T, V)
-            B, T, V = logits_rec.shape
-            logits_flat = logits_rec.reshape(B*T, V)
-            targets_flat = x.reshape(B*T)
-
-            loss = self.loss(logits_flat, targets_flat)
-
-        # ---- HIGHER LAYERS: MSE ----
-        else:
-            # logits_rec: (B,1,H)
-            # x: (B,1,H)
-            loss = self.loss(logits_rec, x)
-
-
-        return loss 
-
-
     def compute_pred_loss(self, logits_pred, y):
         """
         Compute prediction loss only.
@@ -154,47 +137,14 @@ class Layer(nn.Module):
             logits = logits_pred.squeeze(1)
 
             # y: (B,1) -> (B,)
-            targets = y.squeeze(1).long()
+            #targets = y.squeeze(1).long()
 
-            loss = self.loss(logits, targets)
+            loss = self.loss(logits, y)
 
         # ---- HIGHER LAYERS ----
         else:
             loss = self.loss(logits_pred, y)
 
         return loss
-
-    def train_memory(self, x, h0=None, threshold=1e-3):
-        logits_rec, h, h_pass = self.memory(x, h0)
-
-        loss = self.compute_mem_loss(logits_rec, x)
-
-        # backprop
-        if loss > threshold:
-            self.mem_optimizer.zero_grad()
-            loss.backward()
-            self.mem_optimizer.step()
-
-        return loss.item(), logits_rec, h.detach(), h_pass.detach()
-    
-    def train_prediction(self, h, y, context=None, threshold=1e-3):
-        logits_pred = self.prediction(h, context)
-        #print(logits_pred.shape, z.shape, y.shape)
-        if self.layer == 0:
-            loss = self.loss(
-                logits_pred,
-                y.reshape(1)
-            )
-        else:
-            loss = self.loss(logits_pred,  y)
-
-        # backprop
-        if loss > threshold:
-            self.pred_optimizer.zero_grad()
-            loss.backward()
-            self.pred_optimizer.step()
-
-        return loss.item(), logits_pred.detach()
-
 
     
