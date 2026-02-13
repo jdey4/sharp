@@ -18,8 +18,8 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 3
-total_layers, short_term_memory = 2, 4
+total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 6
+total_layers, short_term_memory = 3, 3
 
 vocab_size = n_community * n_members + 1
 
@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [120, 240],    # H0, H1, H2
+    hidden_sizes = [60, 120, 240],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -79,7 +79,7 @@ for x, y in loader:
             print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
 
 
-    if ii%10000==0:
-        model.sleep(target_layer=1, total_steps=10000)
+    # if ii%10000==0:
+    #     model.sleep(target_layer=1, total_steps=10000)
 
  # %%
