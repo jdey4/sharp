@@ -17,9 +17,11 @@ class Model(nn.Module):
             embedding_dim_l0 = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
+            recon_threshold = 1e-4,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
             sleep_steps = None,
+            context_tag_buffer_size=10,
             device = "cpu",
         )
         for k, v in {**defaults, **kwargs}.items():
@@ -42,6 +44,13 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         self.memories = nn.ModuleList()
         self.heads = nn.ModuleList()
+        self.context_tags = deque(
+            maxlen=self.context_tag_buffer_size
+        )
+        self.recon_loss_ema = 1.0
+        self.tokens = deque(
+            maxlen=self.context_tag_buffer_size
+        )
 
         for l in range(self.total_layers):
             output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
@@ -90,6 +99,12 @@ class Model(nn.Module):
             self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
             
 
+    def reset_model(self):
+        self.recon_loss_ema = 1.0
+        self.wake = False
+        self.step = 1
+
+
 
     # ===================================================================
     def summary(self):
@@ -128,12 +143,21 @@ class Model(nn.Module):
 
             for l in range(self.total_layers):
                 H = self.hidden_sizes[l]
-                self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+                self.h_states[l] = torch.zeros(1, H, device=self.device)
                 
             self._freeze_memories(start_layer=0)
             self._unfreeze_memory(layer=0)
             self._unfreeze_heads()
             self.wake = True
+
+        if self.recon_loss_ema < self.recon_threshold and self.memories[0].decoder_is_frozen is False:
+            self.memories[0].freeze_decoder()
+            print("Decoder frozen")
+        
+        if self.recon_loss_ema > 100*self.recon_threshold and self.memories[0].decoder_is_frozen is True:
+            self.memories[0].unfreeze_decoder()
+            print("Decoder unfrozen")
+
 
         self.step += 1
         t = self.step
@@ -146,8 +170,8 @@ class Model(nn.Module):
         # Bottom-up memory updates
         # ------------------------------------------------
         # Layer 0 (trainable)
-        h0, h_ = self.memories[0](x, h_)
-        self.h_states[0] = h0
+        recon_logit, h0, h_ = self.memories[0](x, h_)
+        self.h_states[0] = h0.detach()
 
         # Upper layers (frozen weights, state only)
         with torch.no_grad():
@@ -156,7 +180,7 @@ class Model(nn.Module):
                 if t % stride != 0:
                     continue
 
-                x_vec = self.h_states[l-1].transpose(0, 1)  # (B,1,H_{l-1})
+                x_vec = self.h_states[l-1]
                 self.h_states[l] = self.memories[l].encode_step_from_vec(
                     x_vec, self.h_states[l]
                 )
@@ -165,66 +189,63 @@ class Model(nn.Module):
         # ------------------------------------------------
         context = None
         for l in reversed(range(self.total_layers)):
-            z = self.h_states[l].transpose(0, 1)  # (B,1,H_l)
-
             if l == 0:
                 # final prediction head
-                logits = self.heads[0](z, context=context)  # (B,1,V)
+                if t%self.short_term_memory**2 == 0:
+                    self.context_tags.append(
+                        (h0.detach(), context.detach())
+                    )
+                logits = self.heads[0](h0, context=context) 
+                self.tokens.append(chr(y.item() + ord('A')))
             else:
                 # produce context for lower layer
-                context = self.heads[l](z, context=context)  # (B,1,H_{l-1})
+                context = self.heads[l](self.h_states[l], context=context)  # (B,1,H_{l-1})
 
+        
         logits = logits.squeeze(1)  # (B,V)
-
+        
+        
         # ------------------------------------------------
         # Global loss (ONLY one)
         # ------------------------------------------------
-        loss = nn.functional.cross_entropy(logits, y)
+        B, T, V = recon_logit.shape
+        pred_loss = nn.functional.cross_entropy(logits, y)
+        recon_loss = nn.functional.cross_entropy(recon_logit.reshape(B*T, V), x.reshape(B*T))
+
+        loss = pred_loss + recon_loss
 
         self.wake_opt.zero_grad(set_to_none=True)
         loss.backward()
         self.wake_opt.step()
+
+        self.recon_loss_ema = 0.9*recon_loss.item() + 0.1*self.recon_loss_ema
 
         return logits.detach(), loss.item(), h_.detach()
 
 
 
     @torch.no_grad()
-    def _teacher_step_layer0(self, token, h0_carry, temperature=1.0):
+    def _teacher_step_layer0(self, h0_carry, context=None, temperature=1.0):
         """
         One teacher tick for layer0: token -> memory0 -> logits (context-free) -> next token.
         Returns: h0 (1,B,H0) detached, next_token (B,), updated carry
-        """
-        B = token.size(0)
-        x = token.view(B, 1)  # (B,1)
-        h0_carry = self.memories[0].encode_step_from_token(x, h0_carry)  
+        """ 
 
         z0 = h0_carry.transpose(0, 1)  # (B,1,H0)
-        logits = self.heads[0](z0, context=None).squeeze(1)  # (B,V)
-        next_token = _sample_next_token(logits, temperature=temperature)
+        logits = self.heads[0](z0, context=context).squeeze(1)  # (B,V)
+        next_token = sample_topk(logits)  
+
+        #_sample_next_token(logits, temperature=temperature)
+        h0_carry = self.memories[0].encode_step_from_token(next_token, h0_carry) 
 
         return h0_carry, next_token
 
-    @torch.no_grad()
-    def _teacher_step_higher(self, teacher_layer, x_vec, h_teacher):
-        """
-        Teacher tick for layer>=1:
-        input vec (B,1,H_{teacher-1}) -> memory[teacher_layer] -> h_teacher (1,B,H_teacher)
-        then generate next input vec using frozen head[teacher_layer] context-free:
-            x_vec_next = head[teacher_layer](h_teacher)  (B,1,H_{teacher-1})
-        Returns: h_teacher_detached (1,B,H_teacher), x_vec_next_detached (B,1,H_{teacher-1}), h_teacher
-        """
-        h_teacher = self.memories[teacher_layer].encode_step_from_vec(x_vec, h_teacher)  # (1,B,Ht)
-        z = h_teacher.transpose(0, 1)  # (B,1,Ht)
-        x_vec_next = self.heads[teacher_layer](z, context=None)  # (B,1,H_{t-1})
-        return h_teacher, x_vec_next
-        
 
-
-
-    def sleep(self, target_layer=1, total_steps=3000):
+    def sleep(self, target_layer=1, total_steps=100):
         if self.wake is True:
             self.wake = False
+
+        decoder_loss_ema = 1.0
 
         self._freeze_memories(start_layer=0)
         self._unfreeze_memory(target_layer)
@@ -241,67 +262,66 @@ class Model(nn.Module):
             maxlen=self.short_term_memory
         )
         
-        h = None
-        h_ = None
-        if target_layer == 1:
-            x = torch.tensor(0).view(1,1)
-        else:
-            x = torch.zeros(1,1,self.hidden_sizes[target_layer-1])
+        for jj in range(self.context_tag_buffer_size):
+            h_states = {}
+            h_states[0] = self.context_tags[jj][0].unsqueeze(0)
+            h_ = None
+            for layer in range(1, target_layer):
+                h_states[layer] = None 
 
-        for ii in range(total_steps):
-            if target_layer==1:
-                h, x = self._teacher_step_layer0(x, h)
-            else:
-                h, x = self._teacher_step_higher(target_layer-1,x,h)
-            
-            if ii%self.short_term_memory != 0:
-                continue
-            
-            input = torch.cat(list(input_buffer), dim=1)
+            for ii in range(total_steps):
+                h_states[0], _ = self._teacher_step_layer0(
+                        h_states[0], 
+                        context=self.context_tags[jj][1]
+                    )
 
-            h0, h_ = self.memories[target_layer](input, h_)
-            self.h_states[target_layer] = h0
-
-            # Upper layers (frozen weights, state only)
-            with torch.no_grad():
-                for l in range(target_layer+1, self.total_layers):
-                    stride = self.short_term_memory ** l
-                    if ii % stride != 0:
+                for layer in range(1, target_layer):
+                    if ii%self.short_term_memory**layer != 0:
                         continue
 
-                    x_vec = self.h_states[l-1].transpose(0, 1)  # (B,1,H_{l-1})
-                    self.h_states[l] = self.memories[l].encode_step_from_vec(
-                        x_vec, self.h_states[l]
+                    h_states[layer] = self.memories[layer].encode_step_from_vec(
+                        h_states[layer-1], h_states[layer]
                     )
-            # ------------------------------------------------
-            # Top-down context construction via heads
-            # ------------------------------------------------
-            context = None
-            for l in reversed(range(target_layer, self.total_layers)):
-                z = self.h_states[l].transpose(0, 1)  # (B,1,H_l)
-
                 
-                context = self.heads[l](z, context=context)  # (B,1,H_{l-1})
+                
+                if ii%self.short_term_memory**target_layer != 0:
+                    continue
+                
+                input_buffer.append(h_states[target_layer-1])
+                input = torch.cat(list(input_buffer), dim=1)
 
-            #logits = context.squeeze(1)  # (B,V)
+                recon_logit, _, h_ = self.memories[target_layer](add_gaussian_noise(input), h_)
+                h_ = h_.detach()
 
-            # ------------------------------------------------
-            # Global loss (ONLY one)
-            # ------------------------------------------------
-            loss = loss_func(context, h)
+                recon_loss = loss_func(recon_logit, input)
+                decoder_loss_ema = 0.9*recon_loss.item() + 0.1*decoder_loss_ema
 
-            self.sleep_opt.zero_grad(set_to_none=True)
-            loss.backward()
-            self.sleep_opt.step()
+                if decoder_loss_ema < 0.05 and self.memories[target_layer].decoder_is_frozen is False:
+                    self.memories[target_layer].freeze_decoder()
+                    print("Decoder frozen")
+                
+                if decoder_loss_ema > 0.5 and self.memories[target_layer].decoder_is_frozen is True:
+                    self.memories[target_layer].unfreeze_decoder()
+                    print("Decoder unfrozen")
 
-            input_buffer.append(h)
+                if self.memories[target_layer].decoder_is_frozen is False:
+                    self.sleep_opt.zero_grad(set_to_none=True)
+                    recon_loss.backward()
+                    self.sleep_opt.step() 
 
-        print("Final MSE loss ", loss.item())
-
+            print("Sleep Loss ",jj,": ", decoder_loss_ema)   
+            
+            
                 
 @torch.no_grad()
-def _sample_next_token(logits, temperature=1.0):
-    if temperature != 1.0:
-        logits = logits / max(temperature, 1e-8)
-    probs = torch.softmax(logits, dim=-1)
-    return torch.multinomial(probs, 1).squeeze(-1)  # (B,)               
+def sample_topk(logits, k=2, temperature=1.0):
+    logits = logits / max(temperature, 1e-8)
+    v, ix = torch.topk(logits, k, dim=-1)          # (B,k)
+    probs = torch.softmax(v, dim=-1)
+    choice = torch.multinomial(probs, 1)           # (B,1)
+    return ix.gather(-1, choice).squeeze(-1)       # (B,)
+
+def add_gaussian_noise(x, std=0.01):
+    noise = torch.randn_like(x) * std
+    return x + noise
+

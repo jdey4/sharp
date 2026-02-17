@@ -19,11 +19,11 @@ print("Using device:", device)
 # ---- Parameters ----
 sleep_interval_wake = 30000
 total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 6
-total_layers, short_term_memory = 3, 3
+total_layers, short_term_memory = 3, 4
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, direction_mode="sum_parity")
+data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33)
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [60, 120, 240],    # H0, H1, H2
+    hidden_sizes = [120, 240, 500],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -53,7 +53,7 @@ model = Model(
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
     sleep_steps = 10000,   # layer 2 is the top
-
+    context_tag_buffer_size=10,
     # ---- Misc ----
     device = device
 )
@@ -61,8 +61,10 @@ model = Model(
 model.summary()
 
 #%%
-h_ = None
+model.reset_model()
+
 ii = 0 
+h_ = None
 correct_ring = np.zeros(1000)
 for x, y in loader:
     #loss, _, _, _, _ = model.layers[0].train_step(x,y)
@@ -74,12 +76,26 @@ for x, y in loader:
         pred_tok = logits.argmax(dim=-1)
         correct_ring[ii % 1000] = (pred_tok[0] == y[0, 0]).item()
         
-        if ii%1001 == 0:
+        if ii%1000 == 0:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
             print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
 
 
-    # if ii%10000==0:
-    #     model.sleep(target_layer=1, total_steps=10000)
+    if ii%20000==0:
+        for l in range(1, model.total_layers):
+            print("Sleeping for Layer ",l)
+            model.sleep(target_layer=l, total_steps=500)
 
  # %%
+
+for jj in range(model.context_tag_buffer_size):
+    seq = ''
+    h = model.context_tags[jj][0].unsqueeze(0)
+    for ii in range(64):
+        h, x = model._teacher_step_layer0(h, context=model.context_tags[jj][1])
+        
+        seq += chr(int(x.item()) + ord('A'))
+
+    print(seq)
+
+# %%
