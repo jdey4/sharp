@@ -26,14 +26,14 @@ class Memory(nn.Module):
         self.out = nn.Linear(hidden_size, input_size)
 
         # init
-        for name, p in self.encoder.named_parameters():
-            if "weight_hh" in name: nn.init.orthogonal_(p)
-            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-            elif "bias" in name: nn.init.zeros_(p)
-        for name, p in self.decoder.named_parameters():
-            if "weight_hh" in name: nn.init.orthogonal_(p)
-            elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-            elif "bias" in name: nn.init.zeros_(p)
+        # for name, p in self.encoder.named_parameters():
+        #     if "weight_hh" in name: nn.init.orthogonal_(p)
+        #     elif "weight_ih" in name: nn.init.xavier_uniform_(p)
+        #     elif "bias" in name: nn.init.zeros_(p)
+        # for name, p in self.decoder.named_parameters():
+        #     if "weight_hh" in name: nn.init.orthogonal_(p)
+        #     elif "weight_ih" in name: nn.init.xavier_uniform_(p)
+        #     elif "bias" in name: nn.init.zeros_(p)
     
     
     def forward(self, x, h=None):

@@ -17,7 +17,6 @@ device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cp
 print("Using device:", device)
 
 # ---- Parameters ----
-sleep_interval_wake = 30000
 total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 8
 total_layers, short_term_memory = 3, 4
 
@@ -52,7 +51,6 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    sleep_steps = 10000,   # layer 2 is the top
     context_tag_buffer_size=50,
     # ---- Misc ----
     device = device
@@ -81,14 +79,12 @@ for x, y in loader:
             print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
 
 
-    # if ii%20000==0:
-    #     for l in range(1, model.total_layers):
-    #         if l > 1 and model.memories[l-1].decoder_is_frozen is False:
-    #             continue
-
-    #         print("Sleeping for Layer ",l)
-    #         model.sleep(target_layer=l, total_steps=1000)
-
+    if ii%20000==0:
+        if model.sleep:
+            for l in range(1, model.total_layers):
+                print("Sleeping for Layer ",l)
+                model.sleep(target_layer=l, total_steps=1000)
+            model.sleep = False
  # %%
 
 for jj in range(model.context_tag_buffer_size):
