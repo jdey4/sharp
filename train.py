@@ -18,12 +18,12 @@ print("Using device:", device)
 
 # ---- Parameters ----
 sleep_interval_wake = 30000
-total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 6
+total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 8
 total_layers, short_term_memory = 3, 4
 
 vocab_size = n_community * n_members + 1
 
-data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33)
+data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33, direction_mode="sum_parity")
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -38,7 +38,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [120, 240, 500],    # H0, H1, H2
+    hidden_sizes = [64, 256, 1024],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -53,7 +53,7 @@ model = Model(
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
     sleep_steps = 10000,   # layer 2 is the top
-    context_tag_buffer_size=10,
+    context_tag_buffer_size=50,
     # ---- Misc ----
     device = device
 )
@@ -81,10 +81,13 @@ for x, y in loader:
             print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
 
 
-    if ii%20000==0:
-        for l in range(1, model.total_layers):
-            print("Sleeping for Layer ",l)
-            model.sleep(target_layer=l, total_steps=500)
+    # if ii%20000==0:
+    #     for l in range(1, model.total_layers):
+    #         if l > 1 and model.memories[l-1].decoder_is_frozen is False:
+    #             continue
+
+    #         print("Sleeping for Layer ",l)
+    #         model.sleep(target_layer=l, total_steps=1000)
 
  # %%
 

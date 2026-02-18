@@ -48,9 +48,6 @@ class Model(nn.Module):
             maxlen=self.context_tag_buffer_size
         )
         self.recon_loss_ema = 1.0
-        self.tokens = deque(
-            maxlen=self.context_tag_buffer_size
-        )
 
         for l in range(self.total_layers):
             output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
@@ -196,7 +193,6 @@ class Model(nn.Module):
                         (h0.detach(), context.detach())
                     )
                 logits = self.heads[0](h0, context=context) 
-                self.tokens.append(chr(y.item() + ord('A')))
             else:
                 # produce context for lower layer
                 context = self.heads[l](self.h_states[l], context=context)  # (B,1,H_{l-1})
@@ -296,11 +292,11 @@ class Model(nn.Module):
                 recon_loss = loss_func(recon_logit, input)
                 decoder_loss_ema = 0.9*recon_loss.item() + 0.1*decoder_loss_ema
 
-                if decoder_loss_ema < 0.05 and self.memories[target_layer].decoder_is_frozen is False:
+                if decoder_loss_ema < self.recon_threshold and self.memories[target_layer].decoder_is_frozen is False:
                     self.memories[target_layer].freeze_decoder()
                     print("Decoder frozen")
                 
-                if decoder_loss_ema > 0.5 and self.memories[target_layer].decoder_is_frozen is True:
+                if decoder_loss_ema > 100*self.recon_threshold and self.memories[target_layer].decoder_is_frozen is True:
                     self.memories[target_layer].unfreeze_decoder()
                     print("Decoder unfrozen")
 
@@ -314,14 +310,14 @@ class Model(nn.Module):
             
                 
 @torch.no_grad()
-def sample_topk(logits, k=2, temperature=1.0):
+def sample_topk(logits, k=1, temperature=1.0):
     logits = logits / max(temperature, 1e-8)
     v, ix = torch.topk(logits, k, dim=-1)          # (B,k)
     probs = torch.softmax(v, dim=-1)
     choice = torch.multinomial(probs, 1)           # (B,1)
     return ix.gather(-1, choice).squeeze(-1)       # (B,)
 
-def add_gaussian_noise(x, std=0.01):
+def add_gaussian_noise(x, std=0.1):
     noise = torch.randn_like(x) * std
     return x + noise
 
