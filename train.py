@@ -17,12 +17,12 @@ device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cp
 print("Using device:", device)
 
 # ---- Parameters ----
-total_samples, n_community, n_members, context_depth = 1000000, 2, 3, 8
+total_samples, n_community, n_members, context_depth = 5000000, 2, 3, 26
 total_layers, short_term_memory = 3, 4
 
-vocab_size = n_community * n_members + 1
+vocab_size = 27
 
-data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33, direction_mode="sum_parity")
+data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33, direction_mode="hash_parity")
 
 
 dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
@@ -37,7 +37,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [64, 256, 1024],    # H0, H1, H2
+    hidden_sizes = [64, 128, 256],    # H0, H1, H2
     embedding_dim_l0 = 30,
 
     # ---- Learning rates per layer ----
@@ -51,7 +51,7 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    context_tag_buffer_size=50,
+    context_tag_buffer_size=100,
     # ---- Misc ----
     device = device
 )
@@ -66,7 +66,7 @@ h_ = None
 correct_ring = np.zeros(1000)
 for x, y in loader:
     #loss, _, _, _, _ = model.layers[0].train_step(x,y)
-    logits, loss, h_ = model.wake_step(x, y, h_)
+    logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
 
     with torch.no_grad():
@@ -76,15 +76,12 @@ for x, y in loader:
         
         if ii%1000 == 0:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
-            print("Iter ", ii, f"prediction loss: {loss:.8e}", "Acc: ", acc)
-
+            print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc)
+            if model.sleeping:
+                print("Sleep on")
 
     if ii%20000==0:
-        if model.sleep:
-            for l in range(1, model.total_layers):
-                print("Sleeping for Layer ",l)
-                model.sleep(target_layer=l, total_steps=1000)
-            model.sleep = False
+        model.sleep(total_steps=1000)
  # %%
 
 for jj in range(model.context_tag_buffer_size):

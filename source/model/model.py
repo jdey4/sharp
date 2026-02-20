@@ -20,7 +20,6 @@ class Model(nn.Module):
             recon_threshold = 1e-4,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
-            sleep_steps = None,
             context_tag_buffer_size=10,
             device = "cpu",
         )
@@ -34,9 +33,6 @@ class Model(nn.Module):
         assert self.embedding_dim_l0 is not None
         assert self.lr_layers is not None
         assert len(self.hidden_sizes) == self.total_layers
-
-        if self.sleep_steps is None:
-            self.sleep_steps = {l: 100 for l in range(1, self.total_layers)}
 
         self.step = 1
         # ------------------------------------------------------------
@@ -97,7 +93,6 @@ class Model(nn.Module):
             
 
     def reset_model(self):
-        self.recon_loss_ema = 1.0
         self.wake = False
         self.step = 1
 
@@ -108,7 +103,6 @@ class Model(nn.Module):
         print("\n===== Model Summary =====")
         print(f"Total layers: {self.total_layers}")
         print(f"Hidden sizes: {self.hidden_sizes}")
-        print(f"Sleep steps: {self.sleep_steps}")
         print(f"Device: {self.device}")
         print("=================================\n")
 
@@ -147,15 +141,6 @@ class Model(nn.Module):
             self._unfreeze_heads()
             self.wake = True
 
-        if self.recon_loss_ema < self.recon_threshold and self.memories[0].decoder_is_frozen is False:
-            self.memories[0].freeze_decoder()
-            print("Decoder frozen")
-        
-        if self.recon_loss_ema > 100*self.recon_threshold and self.memories[0].decoder_is_frozen is True:
-            self.memories[0].unfreeze_decoder()
-            print("Decoder unfrozen")
-            self.sleeping = True
-
 
         self.step += 1
         t = self.step
@@ -171,12 +156,14 @@ class Model(nn.Module):
         recon_logit, h0, h_ = self.memories[0](x, h_)
         B, T, V = recon_logit.shape
         recon_loss = nn.functional.cross_entropy(recon_logit.reshape(B*T, V), x.reshape(B*T))
-        self.recon_loss_ema = 0.9*recon_loss.item() + 0.1*self.recon_loss_ema
+        self.recon_loss_ema = 0.5*recon_loss.item() + 0.5*self.recon_loss_ema
 
-        if self.memories[0].decoder_is_frozen is False:
+        if self.recon_loss_ema > self.recon_threshold:
             self.memory_wake_opt.zero_grad(set_to_none=True)
             recon_loss.backward()
             self.memory_wake_opt.step()
+            self.sleeping = True
+            
 
         # Upper layers (frozen weights, state only)
         with torch.no_grad():
@@ -219,12 +206,12 @@ class Model(nn.Module):
         
         pred_loss = nn.functional.cross_entropy(logits, y)
 
-        if pred_loss.item() > 1e-5:
+        if pred_loss.item() > self.recon_threshold:
             self.head_wake_opt.zero_grad(set_to_none=True)
             pred_loss.backward()
             self.head_wake_opt.step()
 
-        return logits.detach(), pred_loss.item(), h_.detach()
+        return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach()
 
 
 
@@ -245,76 +232,82 @@ class Model(nn.Module):
         return h0_carry, next_token
 
 
-    def sleep(self, target_layer=1, total_steps=100):
+    def sleep(self, total_steps=100):
         if self.wake is True:
             self.wake = False
 
-        # decoder_loss_ema = 1.0
+        if self.sleeping is True:
+            self.sleeping = False
+        else:
+            return
 
-        self._freeze_memories(start_layer=0)
-        self._unfreeze_memory(target_layer)
-        self._freeze_heads()
-        opt_kwargs = self.optimizer_kwargs 
-        self.sleep_opt = self.optimizer_class(
-                self.memories[target_layer].parameters(), lr=self.lr_layers, **opt_kwargs
+        for target_layer in range(1, self.total_layers):
+            self._freeze_memories(start_layer=0)
+            self._unfreeze_memory(target_layer)
+            self._freeze_heads()
+
+            decoder_loss_ema = 1.0
+            opt_kwargs = self.optimizer_kwargs 
+            self.sleep_opt = self.optimizer_class(
+                    self.memories[target_layer].parameters(), lr=self.lr_layers, **opt_kwargs
+                )
+            loss_func = nn.MSELoss()
+
+            H_lower = self.hidden_sizes[target_layer-1]
+            input_buffer = deque(
+                [torch.zeros(1, 1, H_lower, device=self.device) for _ in range(self.short_term_memory)],
+                maxlen=self.short_term_memory
             )
-        loss_func = nn.MSELoss()
-
-        H_lower = self.hidden_sizes[target_layer-1]
-        input_buffer = deque(
-            [torch.zeros(1, 1, H_lower, device=self.device) for _ in range(self.short_term_memory)],
-            maxlen=self.short_term_memory
-        )
-        
-        for jj in range(self.context_tag_buffer_size):
-            h_states = {}
-            h_states[0] = self.context_tags[jj][0].unsqueeze(0)
-            h_ = None
-            for layer in range(1, target_layer):
-                h_states[layer] = None 
-
-            for ii in range(total_steps):
-                h_states[0], _ = self._teacher_step_layer0(
-                        h_states[0], 
-                        context=self.context_tags[jj][1]
-                    )
-
-                for layer in range(1, target_layer):
-                    if ii%self.short_term_memory**layer != 0:
-                        continue
-
-                    h_states[layer] = self.memories[layer].encode_step_from_vec(
-                        h_states[layer-1], h_states[layer]
-                    )
-                
-                
-                if ii%self.short_term_memory**target_layer != 0:
-                    continue
-                
-                input_buffer.append(h_states[target_layer-1])
-                input = torch.cat(list(input_buffer), dim=1)
-
-                recon_logit, _, h_ = self.memories[target_layer](add_gaussian_noise(input), h_)
-                h_ = h_.detach()
-
-                recon_loss = loss_func(recon_logit, input)
-                # decoder_loss_ema = 0.9*recon_loss.item() + 0.1*decoder_loss_ema
-
-                # if decoder_loss_ema < 1e-2 and self.memories[target_layer].decoder_is_frozen is False:
-                #     self.memories[target_layer].freeze_decoder()
-                #     print("Decoder frozen")
-                
-                # if decoder_loss_ema > .1 and self.memories[target_layer].decoder_is_frozen is True:
-                #     self.memories[target_layer].unfreeze_decoder()
-                #     print("Decoder unfrozen")
-
-                if self.memories[target_layer].decoder_is_frozen is False:
-                    self.sleep_opt.zero_grad(set_to_none=True)
-                    recon_loss.backward()
-                    self.sleep_opt.step() 
-
-            print("Sleep Loss ",jj,": ", recon_loss.item())   
             
+            for jj in range(self.context_tag_buffer_size):
+                h_states = {}
+                h_states[0] = self.context_tags[jj][0].unsqueeze(0)
+                h_ = None
+                for layer in range(1, target_layer):
+                    h_states[layer] = None 
+
+                for ii in range(total_steps):
+                    h_states[0], _ = self._teacher_step_layer0(
+                            h_states[0], 
+                            context=self.context_tags[jj][1]
+                        )
+
+                    for layer in range(1, target_layer):
+                        if ii%self.short_term_memory**layer != 0:
+                            continue
+
+                        h_states[layer] = self.memories[layer].encode_step_from_vec(
+                            h_states[layer-1], h_states[layer]
+                        )
+                    
+                    
+                    if ii%self.short_term_memory**target_layer != 0:
+                        continue
+                    
+                    input_buffer.append(h_states[target_layer-1])
+                    input = torch.cat(list(input_buffer), dim=1)
+
+                    recon_logit, _, h_ = self.memories[target_layer](add_gaussian_noise(input), h_)
+                    h_ = h_.detach()
+
+                    recon_loss = loss_func(recon_logit, input)
+                    decoder_loss_ema = 0.5*recon_loss.item() + 0.5*decoder_loss_ema
+
+                    # if decoder_loss_ema < 1e-2 and self.memories[target_layer].decoder_is_frozen is False:
+                    #     self.memories[target_layer].freeze_decoder()
+                    #     print("Decoder frozen")
+                    
+                    # if decoder_loss_ema > .1 and self.memories[target_layer].decoder_is_frozen is True:
+                    #     self.memories[target_layer].unfreeze_decoder()
+                    #     print("Decoder unfrozen")
+
+                    if decoder_loss_ema > self.recon_threshold:
+                        self.sleep_opt.zero_grad(set_to_none=True)
+                        recon_loss.backward()
+                        self.sleep_opt.step() 
+
+                print("Layer ", target_layer, " Sleep Loss ",jj,": ", recon_loss.item())   
+                
             
                 
 @torch.no_grad()
