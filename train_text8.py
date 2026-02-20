@@ -122,7 +122,7 @@ h_ = None
 correct_ring = np.zeros(1000)
 bpc_train = np.zeros(1000)
 
-for _ in range(10):
+for _ in range(1):
     for x, y in loader:
         #loss, _, _, _, _ = model.layers[0].train_step(x,y)
         logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
