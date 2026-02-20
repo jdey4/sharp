@@ -67,7 +67,7 @@ class Dataset_converter(Dataset):
 
 #%%
 # ---- Parameters ----
-total_layers, short_term_memory = 3, 4
+total_layers, short_term_memory = 6, 4
 
 vocab_size = 27
 
@@ -92,8 +92,8 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [256, 512, 1024],    # H0, H1, H2
-    embedding_dim_l0 = 50,
+    hidden_sizes = [256, 256, 256, 256, 256, 256],    # H0, H1, H2
+    embedding_dim = 50,
 
     # ---- Learning rates per layer ----
     lr_layers = 1e-4,   
@@ -106,9 +106,9 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    context_tag_buffer_size=50,
+    context_tag_buffer_size=10,
     # ---- Misc ----
-    recon_threshold = 1e-3,
+    recon_threshold = 1e-2,
     device = device
 )
 
@@ -139,12 +139,27 @@ for _ in range(10):
                 bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
                 print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
                 if model.sleeping:
-                    print("Sleep on")
+                    print("Sleep on ", model.recon_loss_ema)
 
         if ii%20000==0:
-            model.sleep(total_steps=1000)
+            model.sleep(total_steps=2000)
 
 # %%
+torch.save(model.state_dict(), "model_text8.pt")
+
+#%%
+# model = Model(**config)
+# model.load_state_dict(torch.load("model_text8.pt"))
+# model.eval()
+
+# for p in model.parameters():
+#     p.requires_grad_(False)
+
+
+
+
+
+
 
 # total = 0
 # bpc_test = 0
@@ -164,3 +179,4 @@ for _ in range(10):
 #         total += 1
         
 # print(f'Finall BPC on test set: {bpc_test/total:.4f}')
+# %%

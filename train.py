@@ -78,7 +78,7 @@ for x, y in loader:
             acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
             print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc)
             if model.sleeping:
-                print("Sleep on")
+                print("Sleep on ", model.recon_loss_ema)
 
     if ii%20000==0:
         model.sleep(total_steps=1000)

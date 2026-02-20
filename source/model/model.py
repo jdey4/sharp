@@ -14,10 +14,10 @@ class Model(nn.Module):
             total_layers = 3,
             vocab_size = None,
             hidden_sizes = None,
-            embedding_dim_l0 = None,
+            embedding_dim = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
-            recon_threshold = 1e-4,
+            recon_threshold = 1e-3,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
             context_tag_buffer_size=10,
@@ -30,7 +30,7 @@ class Model(nn.Module):
         
         assert self.vocab_size is not None
         assert self.hidden_sizes is not None
-        assert self.embedding_dim_l0 is not None
+        assert self.embedding_dim is not None
         assert self.lr_layers is not None
         assert len(self.hidden_sizes) == self.total_layers
 
@@ -43,7 +43,7 @@ class Model(nn.Module):
         self.context_tags = deque(
             maxlen=self.context_tag_buffer_size
         )
-        self.recon_loss_ema = 1.0
+        self.recon_loss_ema = 0.0
         self.sleeping = True
 
         for l in range(self.total_layers):
@@ -62,7 +62,7 @@ class Model(nn.Module):
                 Memory(
                     input_size=input_size,
                     hidden_size=self.hidden_sizes[l],
-                    embedding_dim=self.embedding_dim_l0,
+                    embedding_dim=self.embedding_dim,
                     layer=l
                 )
             )
@@ -103,6 +103,7 @@ class Model(nn.Module):
         print("\n===== Model Summary =====")
         print(f"Total layers: {self.total_layers}")
         print(f"Hidden sizes: {self.hidden_sizes}")
+        print(f"Reconstruction Threshold: {self.recon_threshold}")
         print(f"Device: {self.device}")
         print("=================================\n")
 
@@ -156,7 +157,7 @@ class Model(nn.Module):
         recon_logit, h0, h_ = self.memories[0](x, h_)
         B, T, V = recon_logit.shape
         recon_loss = nn.functional.cross_entropy(recon_logit.reshape(B*T, V), x.reshape(B*T))
-        self.recon_loss_ema = 0.5*recon_loss.item() + 0.5*self.recon_loss_ema
+        self.recon_loss_ema = 0.1*recon_loss.item() + 0.9*self.recon_loss_ema
 
         if self.recon_loss_ema > self.recon_threshold:
             self.memory_wake_opt.zero_grad(set_to_none=True)
@@ -187,7 +188,7 @@ class Model(nn.Module):
         for l in reversed(range(self.total_layers)):
             if l == 0:
                 # final prediction head
-                if t%self.short_term_memory**2 == 0:
+                if t%self.short_term_memory**self.total_layers == 0:
                     self.context_tags.append(
                         (self.h_states[0], context.detach())
                     )
@@ -206,7 +207,7 @@ class Model(nn.Module):
         
         pred_loss = nn.functional.cross_entropy(logits, y)
 
-        if pred_loss.item() > self.recon_threshold:
+        if pred_loss.item() > 1e-4:
             self.head_wake_opt.zero_grad(set_to_none=True)
             pred_loss.backward()
             self.head_wake_opt.step()
@@ -246,7 +247,7 @@ class Model(nn.Module):
             self._unfreeze_memory(target_layer)
             self._freeze_heads()
 
-            decoder_loss_ema = 1.0
+            decoder_loss_ema = 0.0
             opt_kwargs = self.optimizer_kwargs 
             self.sleep_opt = self.optimizer_class(
                     self.memories[target_layer].parameters(), lr=self.lr_layers, **opt_kwargs
@@ -259,7 +260,7 @@ class Model(nn.Module):
                 maxlen=self.short_term_memory
             )
             
-            for jj in range(self.context_tag_buffer_size):
+            for jj in range(len(self.context_tags)):
                 h_states = {}
                 h_states[0] = self.context_tags[jj][0].unsqueeze(0)
                 h_ = None
@@ -291,7 +292,7 @@ class Model(nn.Module):
                     h_ = h_.detach()
 
                     recon_loss = loss_func(recon_logit, input)
-                    decoder_loss_ema = 0.5*recon_loss.item() + 0.5*decoder_loss_ema
+                    decoder_loss_ema = 0.1*recon_loss.item() + 0.9*decoder_loss_ema
 
                     # if decoder_loss_ema < 1e-2 and self.memories[target_layer].decoder_is_frozen is False:
                     #     self.memories[target_layer].freeze_decoder()
@@ -307,7 +308,68 @@ class Model(nn.Module):
                         self.sleep_opt.step() 
 
                 print("Layer ", target_layer, " Sleep Loss ",jj,": ", recon_loss.item())   
-                
+
+    @torch.no_grad()
+    def eval_step_no_train(self, x, y, h_=None):
+        """
+        Evaluate one step without ANY training:
+        - updates states (no grad)
+        - computes prediction logits and CE loss
+        - computes reconstruction loss (for reporting) but does NOT backprop
+        Returns: logits, pred_loss, recon_loss, h_
+        """
+        self.eval()
+
+        # make sure nothing accumulates grads anywhere
+        # (not strictly necessary under no_grad, but helps catch mistakes)
+        for p in self.parameters():
+            p.requires_grad_(False)
+
+        x = x.to(self.device)
+        y = y.view(-1).long().to(self.device)
+
+        # -----------------------------
+        # Layer 0 reconstruction forward
+        # -----------------------------
+        recon_logit, h0, h_pass = self.memories[0](x, h_)
+        B, T, V = recon_logit.shape
+        recon_loss = torch.nn.functional.cross_entropy(recon_logit.reshape(B*T, V), x.reshape(B*T))
+
+        # -----------------------------
+        # Bottom-up state updates (same as wake, but no grad)
+        # -----------------------------
+        # You used self.step to gate stride. For eval, increment too.
+        self.step += 1
+        t = self.step
+
+        for l in range(self.total_layers):
+            stride = self.short_term_memory ** l
+            if t % stride != 0:
+                continue
+
+            if l == 0:
+                self.h_states[l] = self.memories[l].encode_step_from_token(
+                    x[:, -1], self.h_states[l].unsqueeze(0)
+                ).squeeze(0)
+            else:
+                self.h_states[l] = self.memories[l].encode_step_from_vec(
+                    self.h_states[l-1], self.h_states[l]
+                )
+
+        # -----------------------------
+        # Top-down context via heads
+        # -----------------------------
+        context = None
+        for l in reversed(range(self.total_layers)):
+            if l == 0:
+                logits = self.heads[0](self.h_states[0], context=context)
+            else:
+                context = self.heads[l](self.h_states[l], context=context)
+
+        logits = logits.squeeze(1)               # (B, V)
+        pred_loss = torch.nn.functional.cross_entropy(logits, y)   # scalar
+
+        return logits, pred_loss.item(), recon_loss.item(), h_pass          
             
                 
 @torch.no_grad()

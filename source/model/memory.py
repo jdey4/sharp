@@ -17,10 +17,9 @@ class Memory(nn.Module):
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh')
         else:
-            #self.AGC = ActiveRMSNormGain()
-            #assert embedding_dim is not None, "embedding_dim required for layer " + str(self.layer)
-            #self.embedding = nn.Linear(input_size, embedding_dim)
-            self.encoder = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='tanh')
+            assert embedding_dim is not None, "embedding_dim required for layer " + str(self.layer)
+            self.embedding = nn.Linear(input_size, embedding_dim)
+            self.encoder = nn.RNN(embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh')
 
         self.decoder = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='tanh')
         self.out = nn.Linear(hidden_size, input_size)
@@ -40,10 +39,8 @@ class Memory(nn.Module):
 
         B, T = x.shape[0], x.shape[1]
 
-        if self.layer == 0:
-            x_emb = self.embedding(x)
-        else:
-            x_emb = x
+        x_emb = self.embedding(x)
+        
 
         #print(x_emb.shape)
         for ii in range(T):
@@ -106,5 +103,6 @@ class Memory(nn.Module):
 
     @torch.no_grad()
     def encode_step_from_vec(self, x_vec, h_prev):
-        _, h_next = self.encoder(x_vec, h_prev)
+        emb = self.embedding(x_vec)
+        _, h_next = self.encoder(emb, h_prev)
         return h_next
