@@ -90,7 +90,7 @@ class Model(nn.Module):
 
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, 1, H, device=self.device)
+            self.h_states[l] = torch.zeros(1, H, device=self.device)
             
 
     def reset_model(self):
@@ -340,6 +340,7 @@ class Model(nn.Module):
         recon_logit, h0, h_pass = self.memories[0](x, h_)
         B, T, V = recon_logit.shape
         recon_loss = torch.nn.functional.cross_entropy(recon_logit.reshape(B*T, V), x.reshape(B*T))
+        self.recon_loss_ema = 0.1*recon_loss.item() + 0.9*self.recon_loss_ema
 
         # -----------------------------
         # Bottom-up state updates (same as wake, but no grad)
@@ -355,7 +356,7 @@ class Model(nn.Module):
 
             if l == 0:
                 self.h_states[l] = self.memories[l].encode_step_from_token(
-                    x[:, -1], self.h_states[l].unsqueeze(0)
+                        x[:,-1], self.h_states[l].unsqueeze(0)
                 ).squeeze(0)
             else:
                 self.h_states[l] = self.memories[l].encode_step_from_vec(
