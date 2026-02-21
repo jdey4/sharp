@@ -106,7 +106,7 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    context_tag_buffer_size=100,
+    context_tag_buffer_size=20,
     # ---- Misc ----
     recon_threshold = 1e-2,
     device = device
@@ -142,7 +142,7 @@ for _ in range(1):
                     print("Sleep on ", model.recon_loss_ema)
 
         if ii%20000==0:
-            model.sleep(total_steps=2000)
+            model.sleep(total_steps=1025)
 
 # %%
 torch.save(model.state_dict(), "model_text8.pt")
