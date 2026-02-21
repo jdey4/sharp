@@ -67,7 +67,7 @@ class Dataset_converter(Dataset):
 
 #%%
 # ---- Parameters ----
-total_layers, short_term_memory = 6, 4
+total_layers, short_term_memory = 5, 4
 
 vocab_size = 27
 
@@ -92,7 +92,7 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [256, 256, 256, 256, 256, 256],    # H0, H1, H2
+    hidden_sizes = [256, 256, 256, 256, 256],    # H0, H1, H2
     embedding_dim = 50,
 
     # ---- Learning rates per layer ----

@@ -45,6 +45,7 @@ class Model(nn.Module):
         )
         self.recon_loss_ema = 0.0
         self.sleeping = True
+        self.store_tags = False
 
         for l in range(self.total_layers):
             output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
@@ -94,6 +95,7 @@ class Model(nn.Module):
 
     def reset_model(self):
         self.wake = False
+        self.store_tags = False
         self.step = 1
 
 
@@ -164,6 +166,7 @@ class Model(nn.Module):
             recon_loss.backward()
             self.memory_wake_opt.step()
             self.sleeping = True
+            self.store_tags = True
             
 
         # Upper layers (frozen weights, state only)
@@ -188,10 +191,12 @@ class Model(nn.Module):
         for l in reversed(range(self.total_layers)):
             if l == 0:
                 # final prediction head
-                if t%self.short_term_memory**self.total_layers == 0:
+                if self.store_tags:
                     self.context_tags.append(
                         (self.h_states[0], context.detach())
                     )
+                    self.store_tags = False
+                    
                 logits = self.heads[0](self.h_states[0], context=context) 
             else:
                 # produce context for lower layer
@@ -308,6 +313,7 @@ class Model(nn.Module):
                         self.sleep_opt.step() 
 
                 print("Layer ", target_layer, " Sleep Loss ",jj,": ", recon_loss.item())   
+        self.context_tags.clear()
 
     @torch.no_grad()
     def eval_step_no_train(self, x, y, h_=None):
