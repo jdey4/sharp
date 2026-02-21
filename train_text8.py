@@ -106,7 +106,7 @@ model = Model(
 
     # ---- Sleep hyperparameters ----
     short_term_memory = short_term_memory,
-    context_tag_buffer_size=10,
+    context_tag_buffer_size=100,
     # ---- Misc ----
     recon_threshold = 1e-2,
     device = device
