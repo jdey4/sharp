@@ -45,11 +45,11 @@ class PredictionFiLM(nn.Module):
                 )
             elif l==num_layers-1:
                 self.layers.append(
-                    nn.Linear(input_size, input_size)
+                    nn.Linear(input_size, output_size)
                 )
             else:
                 self.layers.append(
-                    nn.Linear(input_size, output_size)
+                    nn.Linear(input_size, input_size)
                 )
 
 
