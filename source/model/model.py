@@ -12,6 +12,7 @@ class Model(nn.Module):
 
         defaults = dict(
             total_layers = 3,
+            num_layers_prediction_head = 1,
             vocab_size = None,
             hidden_sizes = None,
             embedding_dim = None,
@@ -54,6 +55,7 @@ class Model(nn.Module):
                 PredictionFiLM(
                     self.hidden_sizes[l],
                     output_size,
+                    num_layers=self.num_layers_prediction_head,
                     context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
                 )
             )

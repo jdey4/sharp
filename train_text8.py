@@ -14,6 +14,7 @@ import os
 import zipfile
 import urllib.request
 from tqdm import tqdm
+import pickle
 #%%
 device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
@@ -67,7 +68,7 @@ class Dataset_converter(Dataset):
 
 #%%
 # ---- Parameters ----
-total_layers, short_term_memory = 5, 4
+total_layers, head_layers, short_term_memory = 5, 2, 4
 
 vocab_size = 27
 
@@ -81,6 +82,9 @@ short_term_memory = 4
 train_data_set = Dataset_converter(encoded[:train_sample], 1, short_term_memory=short_term_memory)
 test_data_set = Dataset_converter(encoded[train_sample:], 1, short_term_memory=short_term_memory)
 
+res_acc = []
+res_bpc = []
+
 loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
 
 
@@ -89,6 +93,7 @@ loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
 # ============================================================
 model = Model(
     total_layers = total_layers,
+    num_layers_prediction_head = head_layers,
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
@@ -137,6 +142,9 @@ for _ in range(1):
             if ii%1000 == 0:
                 acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
                 bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
+                res_acc.append(acc)
+                res_bpc.append(bpc)
+
                 print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
                 if model.sleeping:
                     print("Sleep on ", model.recon_loss_ema)
@@ -145,6 +153,10 @@ for _ in range(1):
             model.sleep(total_steps=1025)
 
 # %%
+summary = (res_acc, res_bpc)
+with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
+    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 torch.save(model.state_dict(), "/Users/jd/sleep_experiment/saved_models/model_text8.pt")
 
 #%%

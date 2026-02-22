@@ -31,13 +31,27 @@ class PredictionFiLM(nn.Module):
             Returns:
                 Tensor (B, T, output_size)
     """
-    def __init__(self, input_size, output_size, context_size=0):
+    def __init__(self, input_size, output_size, num_layers=1, context_size=0):
         super().__init__()
         self.context_size = context_size
         self.input_size = input_size
 
         # Base linear layers
-        self.l1 = nn.Linear(input_size, output_size)
+        self.layers = nn.ModuleList()
+        for l in range(num_layers):
+            if l == 0:
+                self.layers.append(
+                    nn.Linear(input_size, input_size)
+                )
+            elif l==num_layers-1:
+                self.layers.append(
+                    nn.Linear(input_size, input_size)
+                )
+            else:
+                self.layers.append(
+                    nn.Linear(input_size, output_size)
+                )
+
 
         # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
@@ -60,6 +74,7 @@ class PredictionFiLM(nn.Module):
         
 
         # Decode through nonlinear readout
-        x = self.l1(nn.functional.gelu(z))
+        for layer in self.layers:
+            z = layer(nn.functional.gelu(z))
         
-        return x
+        return z
