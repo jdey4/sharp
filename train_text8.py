@@ -92,8 +92,8 @@ model = Model(
 
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
-    hidden_sizes = [256, 256, 256, 256, 256],    # H0, H1, H2
-    embedding_dim = 50,
+    hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
+    embedding_dim = 100,
 
     # ---- Learning rates per layer ----
     lr_layers = 1e-4,   
@@ -145,7 +145,7 @@ for _ in range(1):
             model.sleep(total_steps=1025)
 
 # %%
-torch.save(model.state_dict(), "model_text8.pt")
+torch.save(model.state_dict(), "/Users/jd/sleep_experiment/saved_models/model_text8.pt")
 
 #%%
 # model = Model(**config)

@@ -160,7 +160,7 @@ for _ in range(1):
                 if model[model_to_train].sleeping:
                     print("Sleep on ", model[model_to_train].recon_loss_ema)
 
-        if ii%10000==0:
+        if ii%8000==0:
             model[model_to_train].sleep(total_steps=1025)
 
 # %%
