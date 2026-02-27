@@ -1,5 +1,5 @@
 #%%
-from source.utils import DatasetConverter, compute_bpc
+from source.utils import DatasetConverter, compute_bpc, evaluate_model
 from source.model.model import Model
 
 import torch
@@ -15,6 +15,7 @@ import zipfile
 import urllib.request
 from tqdm import tqdm
 import pickle
+import math
 #%%
 device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
@@ -67,6 +68,7 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
+model_no = 4
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
@@ -75,18 +77,18 @@ vocab_size = 27
 text = download_text8()
 stoi, itos = build_vocab(text)
 encoded = encode(text, stoi)
-train_sample = 90000000
+train_sample = 10000000
 test_sample = 10000000
 short_term_memory = 4
 
-train_data_set = Dataset_converter(encoded[:train_sample], 1, short_term_memory=short_term_memory)
-test_data_set = Dataset_converter(encoded[train_sample:], 1, short_term_memory=short_term_memory)
+train_data_set = Dataset_converter(encoded[(model_no-1)*train_sample:model_no*train_sample], 1, short_term_memory=short_term_memory)
+#test_data_set = Dataset_converter(encoded[train_sample:], 1, short_term_memory=short_term_memory)
 
-res_acc = []
-res_bpc = []
+# res_acc = []
+# res_bpc = []
 
 loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
-
+#%%
 
 # ============================================================
 # Build a 3-layer hierarchical predictive + memory model
@@ -98,7 +100,7 @@ model = Model(
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
     hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
-    embedding_dim = 100,
+    embedding_dim = 50,
 
     # ---- Learning rates per layer ----
     lr_layers = 1e-4,   
@@ -120,6 +122,7 @@ model = Model(
 model.summary()
 
 #%%
+print("Traing model ",  model_no)
 model.reset_model()
 
 ii = 0 
@@ -142,8 +145,8 @@ for _ in range(1):
             if ii%1000 == 0:
                 acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
                 bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
-                res_acc.append(acc)
-                res_bpc.append(bpc)
+                # res_acc.append(acc)
+                # res_bpc.append(bpc)
 
                 print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
                 if model.sleeping:
@@ -153,42 +156,39 @@ for _ in range(1):
             model.sleep(total_steps=1025)
 
 # %%
-summary = (res_acc, res_bpc)
-with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
-    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+# summary = (res_acc, res_bpc)
+# with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
+#     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-torch.save(model.state_dict(), "/Users/jd/sleep_experiment/saved_models/model_text8.pt")
+torch.save(model.state_dict(), "/Users/jd/sleep_experiment/saved_models/model'+str(model_no)"+"_text8.pt")
 
 #%%
-# model = Model(**config)
-# model.load_state_dict(torch.load("model_text8.pt"))
-# model.eval()
+# model = Model(    
+#         total_layers = total_layers,
+#         num_layers_prediction_head = head_layers,
 
-# for p in model.parameters():
-#     p.requires_grad_(False)
+#         # ---- Layer sizes ----
+#         vocab_size = vocab_size,                  # layer 0 input dimension
+#         hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
+#         embedding_dim = 50,
+
+#         # ---- Learning rates per layer ----
+#         lr_layers = 1e-4,   
+
+#         # ---- Optimizer type (user can choose) ----
+#         optimizer_class = torch.optim.Adam,
+#         optimizer_kwargs = {
+#             "weight_decay": 1e-12
+#         },
+
+#         # ---- Sleep hyperparameters ----
+#         short_term_memory = short_term_memory,
+#         context_tag_buffer_size=20,
+#         # ---- Misc ----
+#         recon_threshold = 1e-2,
+#         device = device
+#     )
+# model.load_state_dict(torch.load("/Users/jd/sleep_experiment/saved_models/model2_text8.pt"))
 
 
-
-
-
-
-
-# total = 0
-# bpc_test = 0
-# test_loader = DataLoader(test_data_set, batch_size=1, shuffle=False)
-
-# for X, y in tqdm(test_loader):
-#     with torch.no_grad():
-#         for layer in range(total_layers):
-#             # print(layer)
-
-#             if layer == 0:
-#                 logits, h[layer] = model[0].encoder(X, context[0], h[layer]) 
-
-#                 bpc_test += compute_bpc(logits, y)
-
-
-#         total += 1
-        
-# print(f'Finall BPC on test set: {bpc_test/total:.4f}')
 # %%

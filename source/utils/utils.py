@@ -5,7 +5,7 @@ import math
 import random
 from torch.utils.data import Dataset
 from torch import from_numpy as tnsr
-
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
 def _get_member(community, n_members, clockwise=True, train=True, train_percent=.66):
@@ -151,6 +151,44 @@ def compute_bpc(logits, targets):
     # Convert from nats to bits
     bpc = loss_nats.item() / math.log(2)
     return bpc
+
+def evaluate_model(model, test_dataset, device="cpu"):
+    model.eval()
+    model.reset_model()   # reset hidden state progression
+    
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+    total_tokens = 0
+    total_correct = 0
+    total_bpc = 0.0
+
+    h_ = None
+
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            logits, pred_loss, recon_loss, h_ = model.eval_step_no_train(x, y, h_)
+
+            # BPC = CE (nats) / ln(2)
+            bpc = pred_loss / math.log(2)
+
+            pred_tok = logits.argmax(dim=-1)
+
+            total_correct += (pred_tok[0] == y.view(-1)[0]).item()
+            total_bpc += bpc
+            total_tokens += 1
+
+    avg_acc = total_correct / total_tokens
+    avg_bpc = total_bpc / total_tokens
+
+    print("\n===== TEST RESULTS =====")
+    print(f"Accuracy: {avg_acc:.6f}")
+    print(f"BPC:      {avg_bpc:.6f}")
+    print("========================\n")
+
+    return avg_acc, avg_bpc
 
 
 class PatternedSequenceGenerator:
