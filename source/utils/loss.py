@@ -2,6 +2,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class MaskedMSELoss(nn.Module):
+    """
+    Mean Squared Error computed only over non-zero target entries.
+    """
+
+    def __init__(self, thresh=1e-6, eps=1e-8):
+        super().__init__()
+        self.thresh = thresh
+        self.eps = eps
+
+    def forward(self, pred, target):
+        """
+        pred, target: same shape
+        """
+        mask = (target.abs() > self.thresh).float()
+        diff2 = (pred - target) ** 2
+
+        loss = (diff2 * mask).sum() / (mask.sum() + self.eps)
+        return loss
+    
+    
 class CrossEntropyL1Loss(nn.Module):
     """
     Combined Cross-Entropy + L1 sparsity regularization loss.
@@ -106,4 +127,69 @@ class MSEL1Loss(nn.Module):
     def set_lambda(self, new_lambda: float):
         """Dynamically update sparsity strength λ during training."""
         self.lambda_l1 = new_lambda
+
+
+class CrossEntropyLayerLoss(nn.Module):
+    """
+    Combined CE loss for layer 0:
+      - AE reconstruction loss
+      - Next-token prediction loss
+    """
+    def __init__(self, recon_weight=1.0, pred_weight=1.0):
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss()
+        self.recon_weight = recon_weight
+        self.pred_weight = pred_weight
+
+    def forward(
+                self, 
+                logits_recon, targets_recon,
+                logits_pred, targets_pred
+            ):
+        
+        # flatten for CE
+        B, T, V = logits_recon.shape
+        
+        loss_recon = self.ce(
+            logits_recon.reshape(B*T, V),
+            targets_recon.reshape(B*T)
+        )
+
+        Bp, Tp, Vp = logits_pred.shape
+        
+        loss_pred = self.ce(
+            logits_pred.reshape(Bp*Tp, Vp),
+            targets_pred.reshape(Bp*Tp)
+        )
+        
+        return self.recon_weight * loss_recon + self.pred_weight * loss_pred, loss_recon
+    
+    
+    
+class MSELayerLoss(nn.Module):
+    """
+    Combined MSE loss for upper layers:
+        - Autoencoder reconstruction loss
+        - Next hidden-state prediction loss
+    """
+    def __init__(self, recon_weight=1.0, pred_weight=1.0):
+        super().__init__()
+        self.mse = nn.MSELoss()
+        self.recon_weight = recon_weight
+        self.pred_weight = pred_weight
+
+    def forward(self,
+                logits_reconstruction, targets_reconstruction,
+                logits_prediction,     targets_prediction):
+        
+        # Reconstruction loss (AE)
+        loss_recon = self.mse(logits_reconstruction, targets_reconstruction)
+
+        # Prediction loss (next-state prediction)
+        loss_pred  = self.mse(logits_prediction, targets_prediction)
+
+        # Weighted sum
+        return self.recon_weight * loss_recon + self.pred_weight * loss_pred
+    
+
 
