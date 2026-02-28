@@ -68,7 +68,7 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
-model_no = 8
+model_no = 7
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
@@ -160,8 +160,10 @@ for _ in range(1):
 # with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
 #     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-torch.save(model.state_dict(), "/Users/jd/sleep_experiment/saved_models/model'+str(model_no)"+"_text8.pt")
-
+torch.save(
+    model.state_dict(),
+    f"./saved_models/model{model_no}_text8.pt"
+)
 #%%
 # model = Model(    
 #         total_layers = total_layers,
