@@ -17,7 +17,7 @@ from tqdm import tqdm
 import pickle
 import math
 #%%
-device = "gpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = "cuda" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 print("Using device:", device)
 
