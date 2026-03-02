@@ -81,7 +81,7 @@ train_sample = 10000000
 test_sample = 10000000
 short_term_memory = 4
 
-train_data_set = Dataset_converter(encoded[(model_no-1)*train_sample:model_no*train_sample], 1, short_term_memory=short_term_memory)
+train_data_set = Dataset_converter(encoded[(model_no-1)*train_sample:model_no*train_sample], short_term_memory=short_term_memory)
 #test_data_set = Dataset_converter(encoded[train_sample:], 1, short_term_memory=short_term_memory)
 
 # res_acc = []

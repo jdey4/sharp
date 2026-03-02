@@ -25,7 +25,7 @@ vocab_size = 27
 data = get_sequence(total_samples, n_community, n_members, context_depth=context_depth, train_percent=0.33, direction_mode="hash_parity")
 
 
-dataset = DatasetConverter(data, working_memory=1, short_term_memory=short_term_memory)
+dataset = DatasetConverter(data, short_term_memory=short_term_memory)
 loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
 

@@ -328,9 +328,9 @@ class PatternedSequenceGenerator:
 # =========================
 
 class DatasetConverter(Dataset):
-    def __init__(self, data, working_memory=1, short_term_memory=3):
-        self.X = np.zeros((len(data)-working_memory-short_term_memory, short_term_memory), dtype=np.int64)
-        self.y = np.zeros((len(data)-working_memory-short_term_memory, 1), dtype=np.int64)
+    def __init__(self, data, short_term_memory=3):
+        self.X = np.zeros((len(data)-1-short_term_memory, short_term_memory), dtype=np.int64)
+        self.y = np.zeros((len(data)-1-short_term_memory, 1), dtype=np.int64)
         for i in range(self.X.shape[0]):
             for j in range(self.X.shape[1]):
                 self.X[i, j] = ord(data[i+j]) - 65
