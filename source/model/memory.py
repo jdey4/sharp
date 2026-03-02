@@ -24,16 +24,6 @@ class Memory(nn.Module):
         self.decoder = nn.RNN(input_size, hidden_size, batch_first=True, nonlinearity='tanh')
         self.out = nn.Linear(hidden_size, input_size)
 
-        # init
-        # for name, p in self.encoder.named_parameters():
-        #     if "weight_hh" in name: nn.init.orthogonal_(p)
-        #     elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-        #     elif "bias" in name: nn.init.zeros_(p)
-        # for name, p in self.decoder.named_parameters():
-        #     if "weight_hh" in name: nn.init.orthogonal_(p)
-        #     elif "weight_ih" in name: nn.init.xavier_uniform_(p)
-        #     elif "bias" in name: nn.init.zeros_(p)
-    
     
     def forward(self, x, h=None):
 
@@ -41,8 +31,6 @@ class Memory(nn.Module):
 
         x_emb = self.embedding(x)
         
-
-        #print(x_emb.shape)
         for ii in range(T):
             _, h = self.encoder(x_emb[:,ii,:], h)
 
@@ -53,7 +41,6 @@ class Memory(nn.Module):
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
         outs, h_dec = [], h.unsqueeze(1)
 
-        #print(h_dec, h_dec.shape)
         for _ in range(T):
             d, h_dec = self.decoder(dec_in, h_dec)
             logits = self.out(d)
@@ -62,37 +49,6 @@ class Memory(nn.Module):
             dec_in = logits.detach()
         return torch.cat(outs, dim=1), h, h_pass
     
-
-    def freeze_decoder(self):
-        """
-        Freeze decoder + output projection.
-        Encoder remains trainable.
-        """
-        self.decoder_is_frozen = True
-
-        for p in self.decoder.parameters():
-            p.requires_grad_(False)
-        for p in self.out.parameters():
-            p.requires_grad_(False)
-
-    def unfreeze_decoder(self):
-        """
-        Unfreeze decoder + output projection.
-        """
-        self.decoder_is_frozen = False
-
-        for p in self.decoder.parameters():
-            p.requires_grad_(True)
-        for p in self.out.parameters():
-            p.requires_grad_(True)
-
-    def decoder_is_frozen(self):
-        """
-        Returns True if all decoder params are frozen.
-        """
-        return not any(p.requires_grad for p in self.decoder.parameters()) \
-               and not any(p.requires_grad for p in self.out.parameters())
-
 
     @torch.no_grad()
     def encode_step_from_token(self, token_id, h_prev):
