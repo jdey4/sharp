@@ -77,10 +77,10 @@ def get_sequence(
     n_community,
     n_members,
     train=True,
-    train_percent=0.66,
+    train_percent=0.33,
     random_state=0,
     return_direction=False,
-    context_depth=3,          # <-- NEW: K past visits control direction
+    context_depth=2,          # <-- NEW: K past visits control direction
     direction_mode="hash_parity"  # "hash_parity", "sum_parity", or "match"
 ):
     """
