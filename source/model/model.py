@@ -15,6 +15,7 @@ class Model(nn.Module):
             num_layers_prediction_head = 1,
             vocab_size = None,
             hidden_sizes = None,
+            prediction_sizes = None,
             embedding_dim = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
@@ -35,6 +36,10 @@ class Model(nn.Module):
         assert self.lr_layers is not None
         assert len(self.hidden_sizes) == self.total_layers
 
+        if self.prediction_sizes is None:
+            self.prediction_sizes = self.hidden_sizes
+
+
         self.step = 1
         # ------------------------------------------------------------
         # 1. BUILD LAYERS (with correct context sizes)
@@ -53,7 +58,7 @@ class Model(nn.Module):
 
             self.heads.append(
                 PredictionFiLM(
-                    self.hidden_sizes[l],
+                    self.prediction_sizes[l],
                     output_size,
                     num_layers=self.num_layers_prediction_head,
                     context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0

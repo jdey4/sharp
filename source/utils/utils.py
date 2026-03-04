@@ -38,7 +38,7 @@ def _get_member(community, n_members, clockwise=True, train=True, train_percent=
     return seq
 
 
-def _direction_from_history(visits, t, K, n_community, mode="hash_parity"):
+def _direction_from_history(visits, t, K, n_community, mode="sum_parity"):
     """
     Determine direction for visit index t using the previous K visits.
 
