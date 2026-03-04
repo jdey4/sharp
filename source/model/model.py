@@ -15,7 +15,6 @@ class Model(nn.Module):
             num_layers_prediction_head = 1,
             vocab_size = None,
             hidden_sizes = None,
-            prediction_sizes = None,
             embedding_dim = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
@@ -36,10 +35,6 @@ class Model(nn.Module):
         assert self.lr_layers is not None
         assert len(self.hidden_sizes) == self.total_layers
 
-        if self.prediction_sizes is None:
-            self.prediction_sizes = self.hidden_sizes
-
-
         self.step = 1
         # ------------------------------------------------------------
         # 1. BUILD LAYERS (with correct context sizes)
@@ -58,7 +53,7 @@ class Model(nn.Module):
 
             self.heads.append(
                 PredictionFiLM(
-                    self.prediction_sizes[l],
+                    self.hidden_sizes[l],
                     output_size,
                     num_layers=self.num_layers_prediction_head,
                     context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
@@ -245,7 +240,7 @@ class Model(nn.Module):
         return h0_carry, next_token
 
 
-    def sleep(self, total_steps=100):
+    def sleep(self, total_steps=100, verbose=False):
         if self.wake is True:
             self.wake = False
 
@@ -306,20 +301,14 @@ class Model(nn.Module):
                     recon_loss = loss_func(recon_logit, input)
                     decoder_loss_ema = 0.1*recon_loss.item() + 0.9*decoder_loss_ema
 
-                    # if decoder_loss_ema < 1e-2 and self.memories[target_layer].decoder_is_frozen is False:
-                    #     self.memories[target_layer].freeze_decoder()
-                    #     print("Decoder frozen")
-                    
-                    # if decoder_loss_ema > .1 and self.memories[target_layer].decoder_is_frozen is True:
-                    #     self.memories[target_layer].unfreeze_decoder()
-                    #     print("Decoder unfrozen")
-
                     if decoder_loss_ema > self.recon_threshold:
                         self.sleep_opt.zero_grad(set_to_none=True)
                         recon_loss.backward()
                         self.sleep_opt.step() 
 
-                print("Layer ", target_layer, " Sleep Loss ",jj,": ", recon_loss.item())   
+                if verbose:
+                    print("Layer ", target_layer, " Sleep Loss ",jj,": ", recon_loss.item())   
+                    
         self.context_tags.clear()
 
     @torch.no_grad()
