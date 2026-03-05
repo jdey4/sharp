@@ -75,17 +75,16 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         self.wake = False
 
-        # ------------------------------------------------------------
-        # Head optimizers: each upper head learns 10x slower than the one below
-        # ------------------------------------------------------------
-        opt_kwargs = self.optimizer_kwargs or {}
+        params = []
+        # train all heads
+        for head in self.heads:
+            params += list(head.parameters())
 
-        self.head_wake_opts = []
-        for l, head in enumerate(self.heads):
-            lr_l = self.lr_layers * (0.1 ** l)   # head 0: lr, head 1: lr/10, head 2: lr/100, ...
-            self.head_wake_opts.append(
-                self.optimizer_class(head.parameters(), lr=lr_l, **opt_kwargs)
-            )
+        opt_kwargs = self.optimizer_kwargs 
+        self.head_wake_opt = self.optimizer_class(params, lr=self.lr_layers, **opt_kwargs)
+        self.memory_wake_opt = self.optimizer_class(self.memories[0].parameters(), lr=self.lr_layers, **opt_kwargs)
+
+
         # ------------------------------------------------------------
         # 3. STATE 
         # ------------------------------------------------------------
@@ -216,14 +215,9 @@ class Model(nn.Module):
         pred_loss = nn.functional.cross_entropy(logits, y)
 
         if pred_loss.item() > 1e-4:
-            # zero grads for all heads (they all participate in the same pred_loss graph)
-            for opt in self.head_wake_opts:
-                opt.zero_grad(set_to_none=True)
-
+            self.head_wake_opt.zero_grad(set_to_none=True)
             pred_loss.backward()
-
-            for opt in self.head_wake_opts:
-                opt.step()
+            self.head_wake_opt.step()
 
         return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach()
 
@@ -392,4 +386,3 @@ def sample_topk(logits, k=7, temperature=1.0):
 def add_gaussian_noise(x, std=0.1):
     noise = torch.randn_like(x) * std
     return x + noise
-
