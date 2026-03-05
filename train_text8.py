@@ -68,7 +68,7 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
-model_no = 6
+model_no = 7
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
@@ -122,7 +122,7 @@ model = Model(
 model.summary()
 
 #%%
-print("Traing model ",  model_no)
+print("Training model ",  model_no)
 model.reset_model()
 
 ii = 0 
