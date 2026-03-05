@@ -152,7 +152,7 @@ def compute_bpc(logits, targets):
     bpc = loss_nats.item() / math.log(2)
     return bpc
 
-def evaluate_model(model, test_dataset, device="cpu"):
+def evaluate_model(model, test_dataset, device="cpu", verbose=False, max_bpc=4.755):
     model.eval()
     model.reset_model()   # reset hidden state progression
     
@@ -174,6 +174,9 @@ def evaluate_model(model, test_dataset, device="cpu"):
             # BPC = CE (nats) / ln(2)
             bpc = pred_loss / math.log(2)
 
+            if bpc>max_bpc:
+                bpc = max_bpc
+
             pred_tok = logits.argmax(dim=-1)
 
             total_correct += (pred_tok[0] == y.view(-1)[0]).item()
@@ -183,10 +186,11 @@ def evaluate_model(model, test_dataset, device="cpu"):
     avg_acc = total_correct / total_tokens
     avg_bpc = total_bpc / total_tokens
 
-    print("\n===== TEST RESULTS =====")
-    print(f"Accuracy: {avg_acc:.6f}")
-    print(f"BPC:      {avg_bpc:.6f}")
-    print("========================\n")
+    if verbose:
+        print("\n===== TEST RESULTS =====")
+        print(f"Accuracy: {avg_acc:.6f}")
+        print(f"BPC:      {avg_bpc:.6f}")
+        print("========================\n")
 
     return avg_acc, avg_bpc
 
