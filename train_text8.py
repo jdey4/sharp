@@ -68,7 +68,7 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
-model_no = 9
+model_no = 6
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
@@ -100,7 +100,7 @@ model = Model(
     # ---- Layer sizes ----
     vocab_size = vocab_size,                  # layer 0 input dimension
     hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
-    embedding_dim = 50,
+    embedding_dim = 100,
 
     # ---- Learning rates per layer ----
     lr_layers = 1e-4,   
@@ -162,7 +162,7 @@ for _ in range(1):
 
 torch.save(
     model.state_dict(),
-    f"./saved_models/model{model_no}_text8.pt"
+    f"./saved_models/slow_models/model{model_no}_text8.pt"
 )
 #%%
 # model = Model(    

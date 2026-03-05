@@ -135,4 +135,9 @@ print("Average forward BPC ", np.mean(bpc_forward), "+- ", np.std(bpc_forward, d
 print("Average backward accuracy ", np.mean(acc_backward), "+- ", np.std(acc_backward, ddof=1))
 print("Average backward BPC ", np.mean(bpc_backward), "+- ", np.std(bpc_forward, ddof=1))
 
+summary = (acc_forward, bpc_forward, acc_backward, bpc_backward)
+
+with open("/Users/jd/sleep_experiment/pickle_files/text8_res.pickle", 'wb') as f:
+    pickle.dump(summary, f)
+
 # %%
