@@ -85,10 +85,13 @@ acc_forward = []
 bpc_forward = []
 acc_backward = []
 bpc_backward = []
+acc_current = []
+bpc_current = []
 
 for model_no in range(1, total_model+1):
     print("Evaluating model ",  model_no)
     test_data_set_backward = Dataset_converter(encoded[(model_no-1)*train_sample:(model_no-1)*train_sample+1000000], short_term_memory=short_term_memory)
+    test_data_set_current = Dataset_converter(encoded[model_no*train_sample-1000000:model_no*train_sample], short_term_memory=short_term_memory)
 
     model = Model(    
             total_layers = total_layers,
@@ -130,14 +133,23 @@ for model_no in range(1, total_model+1):
     acc_backward.append(avg_acc)
     bpc_backward.append(avg_bpc)
 
+    avg_acc, avg_bpc = evaluate_model(model, test_data_set_current, device=device)
+
+    print("Current accuracy ", avg_acc)
+    print("Current BPC ", avg_bpc)
+    acc_current.append(avg_acc)
+    bpc_current.append(avg_bpc)
+
 print("Average forward accuracy ", np.mean(acc_forward), "+- ", np.std(acc_forward, ddof=1))
 print("Average forward BPC ", np.mean(bpc_forward), "+- ", np.std(bpc_forward, ddof=1))
 print("Average backward accuracy ", np.mean(acc_backward), "+- ", np.std(acc_backward, ddof=1))
 print("Average backward BPC ", np.mean(bpc_backward), "+- ", np.std(bpc_forward, ddof=1))
+print("Average current accuracy ", np.mean(acc_current), "+- ", np.std(acc_current, ddof=1))
+print("Average current BPC ", np.mean(bpc_current), "+- ", np.std(bpc_current, ddof=1))
 
-summary = (acc_forward, bpc_forward, acc_backward, bpc_backward)
+summary = (acc_forward, bpc_forward, acc_backward, bpc_backward, acc_current, bpc_current)
 
 with open("/Users/jd/sleep_experiment/pickle_files/text8_res.pickle", 'wb') as f:
     pickle.dump(summary, f)
 
-# %%
+#%%
