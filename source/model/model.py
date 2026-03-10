@@ -134,7 +134,7 @@ class Model(nn.Module):
                 p.requires_grad_(True)
 
 
-    def wake_step(self, x, y, h_=None):
+    def wake_step(self, x, y, h_=None, return_context=False):
         """
         """
         if self.wake is False:
@@ -227,7 +227,10 @@ class Model(nn.Module):
             for opt in self.head_wake_opts:
                 opt.step()
 
-        return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach()
+        if return_context:
+            return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach(), context.detach()
+        else:
+            return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach()
 
 
 
