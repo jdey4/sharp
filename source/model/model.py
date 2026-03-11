@@ -196,7 +196,7 @@ class Model(nn.Module):
         for l in reversed(range(self.total_layers)):
             if l == 0:
                 # final prediction head
-                if self.store_tags:
+                if self.store_tags and context is not None:
                     self.context_tags.append(
                         (self.h_states[0], context.detach())
                     )
