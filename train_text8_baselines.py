@@ -151,11 +151,9 @@ print("Running model_no:", model_no)
 
 # ---- Parameters ----
 total_layers = 5
-head_layers = 2                  # only used to justify doubling hidden size
 short_term_memory = 4
 embedding_dim = 100
-base_hidden = 512
-hidden_size = base_hidden * head_layers   # 1024
+hidden_size = 512
 vocab_size = 27
 
 text = download_text8()
