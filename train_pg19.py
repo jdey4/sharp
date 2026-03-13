@@ -3,9 +3,7 @@ from source.utils import compute_bpc
 from source.model.model import Model
 
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from torch import from_numpy as tnsr
 import numpy as np
 import os
 import re
@@ -37,8 +35,8 @@ def normalize_to_27_vocab(text):
         normalized string containing only [a-z ].
     """
     text = text.lower()
-    text = re.sub(r'[^a-z]+', ' ', text)   # anything not a-z -> space
-    text = re.sub(r'\s+', ' ', text)       # collapse repeated spaces
+    text = re.sub(r"[^a-z]+", " ", text)   # anything not a-z -> space
+    text = re.sub(r"\s+", " ", text)       # collapse repeated spaces
     return text.strip()
 
 
@@ -54,7 +52,7 @@ def build_fixed_27_vocab():
 
 
 def encode(text, stoi):
-    return np.array([stoi[c] for c in text], dtype=np.int32)
+    return np.fromiter((stoi[c] for c in text), dtype=np.int32, count=len(text))
 
 
 def _extract_text_field(example):
@@ -82,19 +80,10 @@ def load_pg19_books_by_token_budget(
       - each training book is capped at max_train_chars_per_book
       - holdout books are taken from validation (or test)
       - holdout books are optionally truncated for faster evaluation
-
-    Returns:
-        train_books_raw: list[str]
-        holdout_books_raw: list[str]
-        total_train_chars: int
     """
     print("Loading PG-19 from Hugging Face datasets...")
-    # Use a parquet-backed mirror rather than legacy dataset script
     ds = load_dataset("fla-hub/pg19")
 
-    # ------------------------------------------------------------
-    # Collect training books until target token budget is reached
-    # ------------------------------------------------------------
     train_books_raw = []
     total_train_chars = 0
 
@@ -105,25 +94,17 @@ def load_pg19_books_by_token_budget(
         if len(text) < min_book_chars:
             continue
 
-        # Cap each training book so a few giant books do not dominate
         text = text[:max_train_chars_per_book]
 
         if len(text) < min_book_chars:
             continue
 
         remaining_budget = target_train_chars - total_train_chars
-
         if remaining_budget <= 0:
             break
 
-        # If the final selected book would overshoot a lot, trim it
-        # so total_train_chars lands close to target_train_chars.
         if len(text) > remaining_budget:
-            text = text[:remaining_budget]
-
-            # after trimming, renormalize trailing whitespace edge
-            text = text.strip()
-
+            text = text[:remaining_budget].strip()
             if len(text) < min_book_chars:
                 break
 
@@ -139,9 +120,6 @@ def load_pg19_books_by_token_budget(
         if total_train_chars >= target_train_chars:
             break
 
-    # ------------------------------------------------------------
-    # Collect holdout books from validation (or test if needed)
-    # ------------------------------------------------------------
     holdout_split = "validation" if "validation" in ds else "test"
     holdout_books_raw = []
 
@@ -168,26 +146,31 @@ def load_pg19_books_by_token_budget(
 
 #%%
 # ============================================================
-# Step 2: Dataset wrapper
+# Step 2: Memory-efficient dataset wrapper
 # ============================================================
 
-class Dataset_converter(Dataset):
-    def __init__(self, encoded_text, working_memory=1, short_term_memory=8):
-        self.X = []
-        self.y = []
+class PG19SequenceDataset(Dataset):
+    """
+    Memory-efficient next-token dataset.
 
-        for ii in range(0, len(encoded_text) - working_memory - short_term_memory, 1):
-            self.X.append(encoded_text[ii:ii + short_term_memory])
-            self.y.append(encoded_text[ii + short_term_memory])
-
-        self.X = tnsr(np.array(self.X)).long()
-        self.y = tnsr(np.array(self.y)).long()
-
-    def __getitem__(self, index):
-        return self.X[index], self.y[index]
+    Instead of building all subsequences in memory, this dataset stores only
+    the encoded book and slices windows on demand.
+    """
+    def __init__(self, encoded_text, short_term_memory=8):
+        self.encoded_text = encoded_text
+        self.short_term_memory = short_term_memory
+        self.n = len(encoded_text) - short_term_memory
 
     def __len__(self):
-        return self.X.shape[0]
+        return max(0, self.n)
+
+    def __getitem__(self, index):
+        x = self.encoded_text[index:index + self.short_term_memory]
+        y = self.encoded_text[index + self.short_term_memory]
+
+        x = torch.tensor(x, dtype=torch.long)
+        y = torch.tensor(y, dtype=torch.long)
+        return x, y
 
 
 #%%
@@ -225,14 +208,20 @@ def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_boo
         if max_tokens_per_book is not None:
             encoded_book = encoded_book[:max_tokens_per_book]
 
-        if len(encoded_book) <= short_term_memory + 1:
+        if len(encoded_book) <= short_term_memory:
             continue
 
-        ds = Dataset_converter(
+        ds = PG19SequenceDataset(
             encoded_book,
             short_term_memory=short_term_memory
         )
-        loader = DataLoader(ds, batch_size=1, shuffle=False)
+        loader = DataLoader(
+            ds,
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
+        )
 
         reset_eval_state(model)
         h_ = None
@@ -242,10 +231,9 @@ def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_boo
             y = y.to(model.device)
 
             logits, pred_loss, recon_loss, h_ = model.eval_step_no_train(x, y, h_)
-
             bpc = compute_bpc(logits, y)
-            pred_tok = logits.argmax(dim=-1)
 
+            pred_tok = logits.argmax(dim=-1)
             total_correct += (pred_tok[0] == y[0]).item()
             total_bpc += bpc
             total_count += 1
@@ -265,7 +253,7 @@ stoi, itos = build_fixed_27_vocab()
 # ------------------------------------------------------------
 # Main token budget
 # ------------------------------------------------------------
-target_train_chars = 100_000_000   # total normalized chars to train on
+target_train_chars = 100_000_000
 max_train_chars_per_book = 2_000_000
 max_holdout_books = 5
 min_book_chars = 20_000
@@ -345,21 +333,27 @@ model.reset_model()
 ii = 0
 chars_seen = 0
 h_ = None
-correct_ring = np.zeros(1000)
-bpc_train = np.zeros(1000)
+correct_ring = np.zeros(1000, dtype=np.float32)
+bpc_train = np.zeros(1000, dtype=np.float32)
 
-for rep in range(1):   # 1 rep only
+for rep in range(1):
     for book_idx, encoded_book in enumerate(train_books_encoded):
         print(
             f"\n=== Training on book {book_idx + 1}/{len(train_books_encoded)} "
             f"| chars={len(encoded_book):,} ==="
         )
 
-        train_data_set = Dataset_converter(
+        train_data_set = PG19SequenceDataset(
             encoded_book,
             short_term_memory=short_term_memory
         )
-        loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
+        loader = DataLoader(
+            train_data_set,
+            batch_size=1,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False
+        )
 
         # Reset streaming hidden state between books
         h_ = None
@@ -375,14 +369,14 @@ for rep in range(1):   # 1 rep only
                 ii += 1
                 chars_seen += 1
 
-                bpc_train[ii % 1000] = compute_bpc(logits, y)
+                ring_idx = ii % 1000
+                bpc_train[ring_idx] = compute_bpc(logits, y)
                 pred_tok = logits.argmax(dim=-1)
-                correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
+                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
                 if ii % 1000 == 0:
-                    denom = 1000 if ii >= 1000 else ii
-                    acc = np.sum(correct_ring) / denom
-                    bpc = np.sum(bpc_train) / denom
+                    acc = float(np.mean(correct_ring))
+                    bpc = float(np.mean(bpc_train))
 
                     print(
                         "Iter", ii,
@@ -407,7 +401,7 @@ for rep in range(1):   # 1 rep only
 os.makedirs("./saved_models/pg19_models", exist_ok=True)
 torch.save(
     model.state_dict(),
-    f"./saved_models/pg19_models/model{model_no}_pg19_100M_cap2M.pt"
+    f"./saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
 )
 
 #%%
@@ -473,8 +467,8 @@ summary = {
 }
 
 os.makedirs("./pickle_files", exist_ok=True)
-with open("./pickle_files/result_pg19_subset_100M_cap2M.pickle", "wb") as handle:
+with open("./pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print("Saved evaluation summary to ./pickle_files/result_pg19_subset_100M_cap2M.pickle")
+print("Saved evaluation summary to ./pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%
