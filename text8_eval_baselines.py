@@ -12,11 +12,11 @@ import urllib.request
 import pickle
 
 #%%
-device = "cpu"  # torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = "mps"  # torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print("Using device:", device)
 
 # Choose model type here: "rnn", "gru", or "lstm"
-model_type = "rnn"
+model_type = "lstm"
 
 #%%
 # Step 1: Download and extract text8
@@ -153,7 +153,13 @@ def evaluate_rnn_model(model, dataset, batch_size=1, device="cpu"):
 
         pred_tok = logits.argmax(dim=-1)
         total_correct += (pred_tok == y).sum().item()
-        total_bpc += compute_bpc(logits, y) * x.size(0)
+
+        computed_bpc = compute_bpc(logits, y) 
+
+        if computed_bpc > 4.75:
+            computed_bpc = 4.75
+
+        total_bpc += computed_bpc* x.size(0)
         total_count += x.size(0)
 
     avg_acc = total_correct / max(total_count, 1)

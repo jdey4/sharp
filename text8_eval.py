@@ -80,7 +80,7 @@ vocab_size = 27
 
 test_data_set_forward = Dataset_converter(encoded[-1000000:], 1, short_term_memory=short_term_memory)
 #%%
-total_model = 9
+total_model = 1
 acc_forward = []
 bpc_forward = []
 acc_backward = []
@@ -100,7 +100,7 @@ for model_no in range(1, total_model+1):
             # ---- Layer sizes ----
             vocab_size = vocab_size,                  # layer 0 input dimension
             hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
-            embedding_dim = 50,
+            embedding_dim = 100,
 
             # ---- Learning rates per layer ----
             lr_layers = 1e-4,   
@@ -118,7 +118,7 @@ for model_no in range(1, total_model+1):
             recon_threshold = 1e-2,
             device = device
         )
-    model.load_state_dict(torch.load("/Users/jd/sleep_experiment/saved_models/model"+str(model_no)+"_text8.pt"))
+    model.load_state_dict(torch.load("/Users/jd/sleep_experiment/saved_models/slow_models/model"+str(model_no)+"_text8.pt"))
     avg_acc, avg_bpc = evaluate_model(model, test_data_set_forward, device=device)
 
     print("Forward accuracy ", avg_acc)
@@ -149,7 +149,7 @@ print("Average current BPC ", np.mean(bpc_current), "+- ", np.std(bpc_current, d
 
 summary = (acc_forward, bpc_forward, acc_backward, bpc_backward, acc_current, bpc_current)
 
-with open("/Users/jd/sleep_experiment/pickle_files/text8_res.pickle", 'wb') as f:
+with open("/Users/jd/sleep_experiment/pickle_files/text8_res_slow.pickle", 'wb') as f:
     pickle.dump(summary, f)
 
 #%%
