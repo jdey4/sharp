@@ -149,8 +149,8 @@ for _ in range(1):
                 # res_bpc.append(bpc)
 
                 print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
-                if model.sleeping:
-                    print("Sleep on ", model.recon_loss_ema)
+                # if model.sleeping:
+                #     print("Sleep on ", model.recon_loss_ema)
 
         # if ii%20000==0:
         #     model.sleep(total_steps=1025)
