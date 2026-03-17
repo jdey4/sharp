@@ -31,7 +31,11 @@ class Memory(nn.Module):
 
         x_emb = self.embedding(x)
         enc_out, h = self.encoder(x_emb, h)
-        h_pass = enc_out[:, 1, :].unsqueeze(0)
+        
+        if T > 1:
+            h_pass = enc_out[:, 1, :].unsqueeze(0)
+        else:
+            h_pass = enc_out[:, 0, :].unsqueeze(0)
           
 
         
