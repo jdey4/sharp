@@ -26,7 +26,12 @@ class Memory(nn.Module):
 
     
     def forward(self, x, h=None):
-        B, T = x.shape
+        if x.dim() == 2:
+            B, T = x.shape
+        elif x.dim() == 3:
+            B, T, _ = x.shape
+        else:
+            raise ValueError(f"Expected x to be 2D or 3D, got shape {x.shape}")
 
         # (B, T, E)
         x_emb = self.embedding(x)
