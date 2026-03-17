@@ -26,30 +26,38 @@ class Memory(nn.Module):
 
     
     def forward(self, x, h=None):
+        B, T = x.shape
 
-        B, T = x.shape[0], x.shape[1]
-
+        # (B, T, E)
         x_emb = self.embedding(x)
-        enc_out, h = self.encoder(x_emb, h)
-        
-        if T > 1:
-            h_pass = enc_out[:, 1, :].unsqueeze(0)
-        else:
-            h_pass = enc_out[:, 0, :].unsqueeze(0)
-          
 
-        
+        # enc_out: (B, T, H)
+        # h_last:  (1, B, H)
+        enc_out, h_last = self.encoder(x_emb, h)
+
+        # For stride-1 sliding windows, carry the state aligned to the next window.
+        # Current window: [x_t, x_{t+1}, ..., x_{t+T-1}]
+        # Next window:    [x_{t+1}, x_{t+2}, ..., x_{t+T}]
+        # So pass the hidden state at token index 1.
+        if T > 1:
+            h_pass = enc_out[:, 1, :].unsqueeze(0)   # (1, B, H)
+        else:
+            h_pass = enc_out[:, 0, :].unsqueeze(0)   # fallback
+
+        # Final hidden state for decoder init
+        h_dec = h_last   # already (1, B, H), do NOT unsqueeze
+
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
-        outs, h_dec = [], h.unsqueeze(1)
+        outs = []
 
         for _ in range(T):
             d, h_dec = self.decoder(dec_in, h_dec)
             logits = self.out(d)
-
             outs.append(logits)
             dec_in = logits.detach()
-        return torch.cat(outs, dim=1), h, h_pass
-    
+
+        return torch.cat(outs, dim=1), h_last, h_pass
+
 
     @torch.no_grad()
     def encode_step_from_token(self, token_id, h_prev):
