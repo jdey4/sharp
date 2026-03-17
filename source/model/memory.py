@@ -30,12 +30,9 @@ class Memory(nn.Module):
         B, T = x.shape[0], x.shape[1]
 
         x_emb = self.embedding(x)
-        
-        for ii in range(T):
-            _, h = self.encoder(x_emb[:,ii,:], h)
-
-            if ii == 1:
-                h_pass = h   
+        enc_out, h = self.encoder(x_emb, h)
+        h_pass = enc_out[:, 1, :].unsqueeze(0)
+          
 
         
         dec_in = torch.zeros((B, 1, self.input_size), device=x.device, dtype=torch.float)
