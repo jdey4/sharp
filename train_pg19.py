@@ -391,6 +391,7 @@ for rep in range(1):
             #             print("Sleep on", model.recon_loss_ema)
 
             if ii % 20000 == 0:
+                print("Total Iter ", ii)
                 model.sleep(total_steps=1025)
 
 #%%
