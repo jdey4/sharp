@@ -16,7 +16,7 @@ device = "mps"  # torch.device("mps" if torch.backends.mps.is_available() else "
 print("Using device:", device)
 
 # Choose model type here: "rnn", "gru", or "lstm"
-model_type = "lstm"
+model_type = "gru"
 
 #%%
 # Step 1: Download and extract text8
