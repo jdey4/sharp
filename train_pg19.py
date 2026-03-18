@@ -365,30 +365,30 @@ for rep in range(1):
 
             logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
-            with torch.no_grad():
-                ii += 1
-                chars_seen += 1
+            # with torch.no_grad():
+            #     ii += 1
+            #     chars_seen += 1
 
-                ring_idx = ii % 1000
-                bpc_train[ring_idx] = compute_bpc(logits, y)
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+            #     ring_idx = ii % 1000
+            #     bpc_train[ring_idx] = compute_bpc(logits, y)
+            #     pred_tok = logits.argmax(dim=-1)
+            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-                if ii % 1000 == 0:
-                    acc = float(np.mean(correct_ring))
-                    bpc = float(np.mean(bpc_train))
+            #     if ii % 1000 == 0:
+            #         acc = float(np.mean(correct_ring))
+            #         bpc = float(np.mean(bpc_train))
 
-                    print(
-                        "Iter", ii,
-                        f"prediction loss: {loss:.8e}",
-                        f"Memory loss: {recon_loss:.8e}",
-                        "Acc:", acc,
-                        "BPC:", bpc,
-                        f"| chars seen in training stream: {chars_seen:,}"
-                    )
+            #         print(
+            #             "Iter", ii,
+            #             f"prediction loss: {loss:.8e}",
+            #             f"Memory loss: {recon_loss:.8e}",
+            #             "Acc:", acc,
+            #             "BPC:", bpc,
+            #             f"| chars seen in training stream: {chars_seen:,}"
+            #         )
 
-                    if model.sleeping:
-                        print("Sleep on", model.recon_loss_ema)
+            #         if model.sleeping:
+            #             print("Sleep on", model.recon_loss_ema)
 
             if ii % 20000 == 0:
                 model.sleep(total_steps=1025)
