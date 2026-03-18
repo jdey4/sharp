@@ -351,7 +351,7 @@ for rep in range(1):
             train_data_set,
             batch_size=1,
             shuffle=False,
-            num_workers=-1,
+            num_workers=0,
             pin_memory=False
         )
 
