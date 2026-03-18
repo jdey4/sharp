@@ -365,8 +365,8 @@ for rep in range(1):
 
             logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
-            # with torch.no_grad():
-            #     ii += 1
+            with torch.no_grad():
+                ii += 1
             #     chars_seen += 1
 
             #     ring_idx = ii % 1000
