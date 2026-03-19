@@ -21,7 +21,7 @@ print("Using device:", device)
 # ------------------------------------------------------------
 # Choose baseline type here
 # ------------------------------------------------------------
-model_type = "rnn"   # options: "rnn", "gru", "lstm"
+model_type = "gru"   # options: "rnn", "gru", "lstm"
 
 #%%
 # ============================================================
@@ -417,7 +417,7 @@ for rep in range(1):
         # Reset recurrent hidden state between books
         h = None
 
-        for x, y in loader:
+        for x, y in tqdm(loader):
             x = x.to(device)
             y = y.to(device)
 
@@ -436,26 +436,26 @@ for rep in range(1):
                 else:
                     h = h.detach()
 
-            with torch.no_grad():
-                ii += 1
-                chars_seen += 1
+            # with torch.no_grad():
+            #     ii += 1
+            #     chars_seen += 1
 
-                ring_idx = ii % 1000
-                bpc_train[ring_idx] = compute_bpc(logits, y)
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+            #     ring_idx = ii % 1000
+            #     bpc_train[ring_idx] = compute_bpc(logits, y)
+            #     pred_tok = logits.argmax(dim=-1)
+            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-                if ii % 1000 == 0:
-                    acc = float(np.mean(correct_ring))
-                    bpc = float(np.mean(bpc_train))
+            #     if ii % 1000 == 0:
+            #         acc = float(np.mean(correct_ring))
+            #         bpc = float(np.mean(bpc_train))
 
-                    print(
-                        "Iter", ii,
-                        f"loss: {loss.item():.8e}",
-                        "Acc:", acc,
-                        "BPC:", bpc,
-                        f"| chars seen in training stream: {chars_seen:,}"
-                    )
+            #         print(
+            #             "Iter", ii,
+            #             f"loss: {loss.item():.8e}",
+            #             "Acc:", acc,
+            #             "BPC:", bpc,
+            #             f"| chars seen in training stream: {chars_seen:,}"
+            #         )
 
 #%%
 # ============================================================

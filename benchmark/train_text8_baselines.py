@@ -237,5 +237,5 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
 # ============================================================
 # Run all three baselines
 # ============================================================
-for cell_type in ["lstm"]:
+for cell_type in ["rnn", "lstm", "gru"]:
     run_experiment(cell_type)
