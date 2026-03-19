@@ -198,7 +198,7 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
     model.train()
 
     for epoch in range(1):
-        for x, y in loader:
+        for x, y in tqdm(loader):
             x = x.to(device)
             y = y.to(device)
 
@@ -212,22 +212,22 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
             # detach hidden state for truncated online training
             h_ = model.detach_hidden(h_)
 
-            with torch.no_grad():
-                ii += 1
-                bpc_train[ii % 1000] = compute_bpc(logits, y)
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
+            # with torch.no_grad():
+            #     ii += 1
+            #     bpc_train[ii % 1000] = compute_bpc(logits, y)
+            #     pred_tok = logits.argmax(dim=-1)
+            #     correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
 
-                if ii % 1000 == 0:
-                    acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
-                    bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
+            #     if ii % 1000 == 0:
+            #         acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
+            #         bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
 
-                    print(
-                        "Iter", ii,
-                        f"loss: {loss.item():.8e}",
-                        "Acc:", acc,
-                        "BPC:", bpc
-                    )
+            #         print(
+            #             "Iter", ii,
+            #             f"loss: {loss.item():.8e}",
+            #             "Acc:", acc,
+            #             "BPC:", bpc
+            #         )
 
     save_path = os.path.join(save_dir, f"{cell_type}_model{model_no}_text8.pt")
     torch.save(model.state_dict(), save_path)
@@ -237,5 +237,5 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
 # ============================================================
 # Run all three baselines
 # ============================================================
-for cell_type in ["rnn", "lstm", "gru"]:
+for cell_type in ["lstm"]:
     run_experiment(cell_type)
