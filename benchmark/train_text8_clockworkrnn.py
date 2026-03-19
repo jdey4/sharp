@@ -234,7 +234,7 @@ loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
 # ============================================================
 # Training function
 # ============================================================
-def run_experiment(save_dir="./saved_models/baselines_clockwork"):
+def run_experiment(save_dir="../saved_models/baselines_clockwork"):
     os.makedirs(save_dir, exist_ok=True)
 
     model = ClockworkRNN(

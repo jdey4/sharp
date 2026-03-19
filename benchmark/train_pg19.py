@@ -399,10 +399,10 @@ for rep in range(1):
 # Step 7: Save model
 # ============================================================
 
-os.makedirs("./saved_models/pg19_models", exist_ok=True)
+os.makedirs("../saved_models/pg19_models", exist_ok=True)
 torch.save(
     model.state_dict(),
-    f"./saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
 )
 
 #%%
@@ -467,9 +467,9 @@ summary = {
     "max_eval_chars_per_book": max_eval_chars_per_book,
 }
 
-os.makedirs("./pickle_files", exist_ok=True)
-with open("./pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+os.makedirs("../pickle_files", exist_ok=True)
+with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print("Saved evaluation summary to ./pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
+print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%

@@ -174,7 +174,7 @@ loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
 # ============================================================
 # Training function
 # ============================================================
-def run_experiment(cell_type, save_dir="./saved_models/baselines"):
+def run_experiment(cell_type, save_dir="../saved_models/baselines"):
     os.makedirs(save_dir, exist_ok=True)
 
     model = CharRNNBaseline(
