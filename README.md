@@ -27,4 +27,29 @@ It leverages **accelerated sequential replay during sleep phases** to extend eff
 
 Traditional models conflate memory with weight updates via gradient descent.
 
-This work instead decomposes learning into:
+This work instead decomposes learning into:Memory (no credit assignment) and Pattern Recognition (with credit assignment)
+
+
+Memory is:
+- accumulated online (wake phase)
+- consolidated offline (sleep phase)
+
+During sleep:
+- temporally structured sequences are replayed
+- replay is **accelerated via downsampling**
+- higher layers learn long-range structure
+
+---
+
+## Benchmarks
+
+Evaluated on:
+- `text8`
+- `PG-19`
+
+Metrics:
+- **Forward BPC** → future generalization
+- **Backward BPC** → retention of past data
+- **Current BPC** → adaptation to recent data
+
+
