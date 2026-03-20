@@ -1,4 +1,4 @@
-# Temporal Scaffolding: Hierarchical Memory for Streaming Sequence Learning
+# Long Range Non-Stationary Temporal Pattern Recognition via Hierarchical Accelerated Replay
 
 This repository contains the implementation of a hierarchical memory architecture for **single-pass streaming sequence learning** under non-stationary dynamics.
 
