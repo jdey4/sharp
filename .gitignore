@@ -5,3 +5,6 @@ __pycache__
 .DS_Store
 *.pt
 saved_models/*
+hmp.egg-info/*
+build/*
+dist/*
