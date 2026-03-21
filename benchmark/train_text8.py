@@ -17,7 +17,7 @@ from tqdm import tqdm
 import pickle
 import math
 #%%
-device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = "gpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 print("Using device:", device)
 
@@ -131,24 +131,24 @@ correct_ring = np.zeros(1000)
 bpc_train = np.zeros(1000)
 
 for _ in range(1):
-    for x, y in loader:
+    for x, y in tqdm(loader):
         #loss, _, _, _, _ = model.layers[0].train_step(x,y)
         logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
 
-        with torch.no_grad():
-            ii += 1
-            bpc_train[ii % 1000] = compute_bpc(logits, y)
-            pred_tok = logits.argmax(dim=-1)
-            correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
+        # with torch.no_grad():
+        #     ii += 1
+            # bpc_train[ii % 1000] = compute_bpc(logits, y)
+            # pred_tok = logits.argmax(dim=-1)
+            # correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
             
-            if ii%1000 == 0:
-                acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
-                bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
+            # if ii%1000 == 0:
+            #     acc = np.sum(correct_ring) / (1000 if ii >= 1000 else ii)
+            #     bpc = np.sum(bpc_train) / (1000 if ii >= 1000 else ii)
                 # res_acc.append(acc)
                 # res_bpc.append(bpc)
 
-                print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
+                # print("Iter ", ii, f"prediction loss: {loss:.8e}", f"Memory loss: {recon_loss:.8e}", "Acc: ", acc, "BPC: ", bpc)
                 # if model.sleeping:
                 #     print("Sleep on ", model.recon_loss_ema)
 
