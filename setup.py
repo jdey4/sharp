@@ -24,7 +24,7 @@ with open("requirements.txt", "r", encoding="utf-8") as f:
     ]
 
 setup(
-    name="hmp",
+    name="SHARP",
     version=VERSION,
     author="Jayanta Dey",
     author_email="jayanta.dey@utsa.edu",

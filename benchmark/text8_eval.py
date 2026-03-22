@@ -1,6 +1,6 @@
 #%%
-from source.utils import DatasetConverter, compute_bpc, evaluate_model
-from source.model.model import Model
+from sharp.utils import DatasetConverter, compute_bpc, evaluate_model
+from sharp.model.model import Model
 
 import torch
 import torch.nn as nn

@@ -1,6 +1,6 @@
 #%%
-from source.utils import get_sequence, DatasetConverter
-from source.model.model import Model
+from sharp.utils import get_sequence, DatasetConverter
+from sharp.model.model import Model
 
 import torch
 import torch.nn as nn

@@ -1,6 +1,6 @@
 #%%
-from source.utils import compute_bpc
-from source.model.model import Model
+from sharp.utils import compute_bpc
+from sharp.model.model import Model
 
 import torch
 from torch.utils.data import Dataset, DataLoader

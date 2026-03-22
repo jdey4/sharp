@@ -1,5 +1,5 @@
 #%%
-from source.utils import compute_bpc
+from sharp.utils import compute_bpc
 
 import torch
 import torch.nn as nn
