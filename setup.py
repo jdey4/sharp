@@ -2,15 +2,26 @@ from setuptools import setup, find_packages
 import os
 
 PROJECT_PATH = os.path.dirname(os.path.abspath(__file__))
-for line in open(os.path.join(PROJECT_PATH, "source", "__init__.py")):
-    if line.startswith("__version__ = "):
-        VERSION = line.strip().split()[2][1:-1]
 
-with open("README.md", mode="r") as f:
+VERSION = None
+with open(os.path.join(PROJECT_PATH, "source", "__init__.py"), "r") as f:
+    for line in f:
+        if line.startswith("__version__ = "):
+            VERSION = line.strip().split("=")[1].strip().strip('"').strip("'")
+            break
+
+if VERSION is None:
+    raise RuntimeError("Could not find __version__ in source/__init__.py")
+
+with open("README.md", "r", encoding="utf-8") as f:
     LONG_DESCRIPTION = f.read()
 
-with open("requirements.txt", mode="r") as f:
-    REQUIREMENTS = f.read()
+with open("requirements.txt", "r", encoding="utf-8") as f:
+    REQUIREMENTS = [
+        line.strip()
+        for line in f
+        if line.strip() and not line.startswith("#")
+    ]
 
 setup(
     name="hmp",
@@ -19,7 +30,7 @@ setup(
     author_email="jayanta.dey@utsa.edu",
     maintainer="Jayanta Dey",
     maintainer_email="jayanta.dey@utsa.edu",
-    description="A a package for exploring and using sleep model built on temporal scaffolding hypothesis",
+    description="A package for exploring and using sleep models built on the temporal scaffolding hypothesis",
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
     url="https://github.com/jdey4/sleep_experiment/",
@@ -28,9 +39,10 @@ setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Mathematics",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.12.7"
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.12",
     ],
     install_requires=REQUIREMENTS,
     packages=find_packages(exclude=["tests", "tests.*", "tests/*"]),
-    include_package_data=True
+    include_package_data=True,
 )

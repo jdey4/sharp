@@ -1,10 +1,39 @@
-pickle_files/*
-dataset/*
-.ipynb_checkpoints
-__pycache__
+# Data / experiment artifacts
+pickle_files/
+dataset/
+plots/
+saved_models/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
 .DS_Store
+
+# PyTorch
 *.pt
-saved_models/*
-hmp.egg-info/*
-build/*
-dist/*
+
+# Packaging / setup.py artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Installed package leftovers
+*.so
+*.dylib
+
+# Wheel files
+*.whl
+
+# Pip / setuptools temp
+pip-wheel-metadata/
+
+# Logs
+*.log
