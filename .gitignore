@@ -3,6 +3,7 @@ pickle_files/
 dataset/
 plots/
 saved_models/
+benchmark/dataset/
 
 # Python cache
 __pycache__/
