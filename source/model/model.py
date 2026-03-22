@@ -23,6 +23,7 @@ class Model(nn.Module):
             optimizer_kwargs = None,
             context_tag_buffer_size=10,
             accelerate=True,
+            sleep=True,
             device = "cpu",
         )
         for k, v in {**defaults, **kwargs}.items():
@@ -67,7 +68,8 @@ class Model(nn.Module):
                     input_size=input_size,
                     hidden_size=self.hidden_sizes[l],
                     embedding_dim=self.embedding_dim,
-                    layer=l
+                    layer=l,
+                    sleep=self.sleep
                 )
             )
 
