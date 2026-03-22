@@ -4,7 +4,7 @@ import os
 PROJECT_PATH = os.path.dirname(os.path.abspath(__file__))
 
 VERSION = None
-with open(os.path.join(PROJECT_PATH, "source", "__init__.py"), "r") as f:
+with open(os.path.join(PROJECT_PATH, "sharp", "__init__.py"), "r") as f:
     for line in f:
         if line.startswith("__version__ = "):
             VERSION = line.strip().split("=")[1].strip().strip('"').strip("'")
