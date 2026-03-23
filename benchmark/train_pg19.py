@@ -392,7 +392,7 @@ for rep in range(1):
 
             if ii % 20000 == 0:
                 print("Total Iter ", ii)
-                model.sleep(total_steps=1025)
+                model.sleep_step(total_steps=1025)
 
 #%%
 # ============================================================

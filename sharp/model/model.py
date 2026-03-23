@@ -258,7 +258,7 @@ class Model(nn.Module):
         return h0_carry, next_token
 
 
-    def sleep(self, total_steps=100, verbose=False):
+    def sleep_step(self, total_steps=100, verbose=False):
         if self.wake is True:
             self.wake = False
 

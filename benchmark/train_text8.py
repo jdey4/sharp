@@ -154,7 +154,7 @@ for _ in range(1):
                 #     print("Sleep on ", model.recon_loss_ema)
 
         # if ii%20000==0:
-        #     model.sleep(total_steps=1025)
+        #     model.sleep_step(total_steps=1025)
 
 # %%
 # summary = (res_acc, res_bpc)
