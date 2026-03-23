@@ -22,7 +22,7 @@ class Model(nn.Module):
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
             context_tag_buffer_size=10,
-            accelerate=True,
+            accelerate=None,
             sleep=True,
             device = "cpu",
         )
@@ -180,10 +180,10 @@ class Model(nn.Module):
         # Upper layers (frozen weights, state only)
         with torch.no_grad():
             for l in range(self.total_layers):
-                if self.accelerate:
+                if self.accelerate is None:
                     stride = self.short_term_memory ** l
                 else:
-                    stride = 1
+                    stride = self.accelerate
                     
                 if t % stride != 0:
                     continue
@@ -299,7 +299,12 @@ class Model(nn.Module):
                         )
 
                     for layer in range(1, target_layer):
-                        if ii%self.short_term_memory**layer != 0 and self.accelerate:
+                        if self.accelerate is None:
+                            stride = self.short_term_memory ** layer
+                        else:
+                            stride = self.accelerate
+
+                        if ii%stride != 0:
                             continue
 
                         h_states[layer] = self.memories[layer].encode_step_from_vec(
