@@ -15,7 +15,7 @@ import pickle
 from datasets import load_dataset
 
 #%%
-device = "cuda"  # change to "cuda" if running on GPU server
+device = "cpu"  # change to "cuda" if running on GPU server
 print("Using device:", device)
 
 # ------------------------------------------------------------
