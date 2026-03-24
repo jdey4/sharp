@@ -130,7 +130,7 @@ For PG-19:
 ### 6. Run training
 
 ```bash
-python train.py
+python train_pg19.py
 ```
 
 ---
