@@ -136,7 +136,7 @@ python train.py
 ```text
 sleep_experiment/
 │
-├── source/           # Core model implementation
+├── sharp/           # Core model implementation
 ├── benchmark/        # Benchmark experiment scripts
 ├── experiments/      # Simulation experiment scripts
 ├── dataset/          # Data storage (ignored by git)
