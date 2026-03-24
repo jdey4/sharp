@@ -140,9 +140,10 @@ sleep_experiment/
 ├── benchmark/        # Benchmark experiment scripts
 ├── experiments/      # Simulation experiment scripts
 ├── dataset/          # Data storage (ignored by git)
-├── pickle_files/     # Intermediate results
+├── pickle_files/     # Intermediate results (ignored by git)
 ├── plots/            # Visualization outputs
-├── saved_models/     # Checkpoints
+├── saved_models/     # Checkpoints (ignored by git)
+└── requirements.txt  # Dependencies
 ```
 
 ---
