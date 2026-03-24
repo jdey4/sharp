@@ -137,8 +137,8 @@ python train.py
 sleep_experiment/
 │
 ├── source/           # Core model implementation
-├── experiments/      # Experiment scripts
-├── benchmark/        # Evaluation pipelines
+├── benchmark/      # Benchmark experiment scripts
+├── experiments/       # Simulation experiment scripts
 ├── dataset/          # Data storage (ignored by git)
 ├── pickle_files/     # Intermediate results
 ├── plots/            # Visualization outputs
