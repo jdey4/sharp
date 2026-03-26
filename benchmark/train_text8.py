@@ -68,7 +68,7 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
-model_no = 4
+model_no = 6
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
