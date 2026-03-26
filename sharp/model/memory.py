@@ -6,13 +6,13 @@ import torch.nn.functional as F
 
 class Memory(nn.Module):
 
-    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, sleep=True):
+    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, bad_init=False):
         super().__init__()
         self.layer = layer
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.decoder_is_frozen = False
-        self.sleep = sleep
+        self.bad_init = bad_init
 
         if layer == 0:
             assert embedding_dim is not None, "embedding_dim required for layer 0"
@@ -35,7 +35,7 @@ class Memory(nn.Module):
         # --------------------------------------------------
         # Initialization
         # --------------------------------------------------
-        if not self.sleep:
+        if self.bad_init:
             # deliberately weak / bad reservoir-like dynamics
             self._init_ablation_lsm(self.encoder)
         else:

@@ -116,7 +116,7 @@ model = Model(
     context_tag_buffer_size=20,
     # ---- Misc ----
     recon_threshold = 1e-2,
-    sleep=False,
+    bad_init=True,
     device = device
 )
 
