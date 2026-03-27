@@ -137,8 +137,8 @@ for _ in range(1):
         logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
 
-        # with torch.no_grad():
-        #     ii += 1
+        with torch.no_grad():
+            ii += 1
             # bpc_train[ii % 1000] = compute_bpc(logits, y)
             # pred_tok = logits.argmax(dim=-1)
             # correct_ring[ii % 1000] = (pred_tok[0] == y[0]).item()
@@ -153,8 +153,8 @@ for _ in range(1):
                 # if model.sleeping:
                 #     print("Sleep on ", model.recon_loss_ema)
 
-        # if ii%20000==0:
-        #     model.sleep_step(total_steps=1025)
+        if ii%20000==0:
+            model.sleep_step(total_steps=1025)
 
 # %%
 # summary = (res_acc, res_bpc)

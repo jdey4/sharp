@@ -96,10 +96,15 @@ class Model(nn.Module):
         # ------------------------------------------------------------
         self.h_states = {}
 
+        self.to(self.device)
+
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, H, device=self.device)
+            self.h_states[l] = torch.zeros(1, H, device=self._get_runtime_device())
             
+
+    def _get_runtime_device(self):
+        return next(self.parameters()).device
 
     def reset_model(self):
         self.wake = False
@@ -109,7 +114,7 @@ class Model(nn.Module):
         
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
-            self.h_states[l] = torch.zeros(1, H, device=self.device)
+            self.h_states[l] = torch.zeros(1, H, device=self._get_runtime_device())
 
 
 
@@ -150,7 +155,7 @@ class Model(nn.Module):
 
             for l in range(self.total_layers):
                 H = self.hidden_sizes[l]
-                self.h_states[l] = torch.zeros(1, H, device=self.device)
+                self.h_states[l] = torch.zeros(1, H, device=self._get_runtime_device())
                 
             self._freeze_memories(start_layer=0)
             self._unfreeze_memory(layer=0)
@@ -161,8 +166,9 @@ class Model(nn.Module):
         self.step += 1
         t = self.step
 
-        x = x.to(self.device)
-        y = y.view(-1).long().to(self.device)
+        device = self._get_runtime_device()
+        x = x.to(device)
+        y = y.view(-1).long().to(device)
 
         
         # ------------------------------------------------
@@ -355,8 +361,9 @@ class Model(nn.Module):
         for p in self.parameters():
             p.requires_grad_(False)
 
-        x = x.to(self.device)
-        y = y.view(-1).long().to(self.device)
+        device = self._get_runtime_device()
+        x = x.to(device)
+        y = y.view(-1).long().to(device)
 
         # -----------------------------
         # Layer 0 reconstruction forward

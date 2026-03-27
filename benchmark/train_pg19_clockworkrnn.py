@@ -13,7 +13,7 @@ import math
 from datasets import load_dataset
 
 #%%
-device = "cpu"   # change to "cuda" or "mps" if needed
+device = "mps"   # change to "cuda" or "mps" if needed
 print("Using device:", device)
 
 #%%
