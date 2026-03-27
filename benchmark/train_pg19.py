@@ -343,6 +343,9 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
+        if book_idx<269:
+            break
+        
         train_data_set = PG19SequenceDataset(
             encoded_book,
             short_term_memory=short_term_memory
@@ -357,7 +360,7 @@ for rep in range(1):
 
         # Reset streaming hidden state between books
         h_ = None
-        model.wake = False
+        model.reset_model()
 
         for x, y in loader:
             x = x.to(model.device)
@@ -394,16 +397,17 @@ for rep in range(1):
                 print("Total Iter ", ii)
                 model.sleep_step(total_steps=1025)
 
+
 #%%
 # ============================================================
 # Step 7: Save model
 # ============================================================
 
-os.makedirs("../saved_models/pg19_models", exist_ok=True)
-torch.save(
-    model.state_dict(),
-    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
-)
+# os.makedirs("../saved_models/pg19_models", exist_ok=True)
+# torch.save(
+#     model.state_dict(),
+#     f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+# )
 
 #%%
 # ============================================================
@@ -467,9 +471,9 @@ summary = {
     "max_eval_chars_per_book": max_eval_chars_per_book,
 }
 
-os.makedirs("../pickle_files", exist_ok=True)
-with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
-    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+# os.makedirs("../pickle_files", exist_ok=True)
+# with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+#     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
+# print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%

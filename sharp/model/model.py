@@ -105,6 +105,11 @@ class Model(nn.Module):
         self.wake = False
         self.store_tags = False
         self.step = 1
+        self.context_tags.clear()
+        
+        for l in range(self.total_layers):
+            H = self.hidden_sizes[l]
+            self.h_states[l] = torch.zeros(1, H, device=self.device)
 
 
 
