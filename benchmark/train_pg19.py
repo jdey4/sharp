@@ -15,7 +15,7 @@ import pickle
 from datasets import load_dataset
 
 #%%
-device = "cpu"  # change to "cuda" if running on GPU server
+device = "mps"  # change to "cuda" if running on GPU server
 print("Using device:", device)
 
 #%%
@@ -343,9 +343,6 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx<269:
-            break
-        
         train_data_set = PG19SequenceDataset(
             encoded_book,
             short_term_memory=short_term_memory
@@ -362,7 +359,7 @@ for rep in range(1):
         h_ = None
         model.reset_model()
 
-        for x, y in loader:
+        for x, y in tqdm(loader):
             x = x.to(model.device)
             y = y.to(model.device)
 
@@ -394,20 +391,19 @@ for rep in range(1):
             #             print("Sleep on", model.recon_loss_ema)
 
             if ii % 20000 == 0:
-                print("Total Iter ", ii)
+                # print("Total Iter ", ii)
                 model.sleep_step(total_steps=1025)
-
 
 #%%
 # ============================================================
 # Step 7: Save model
 # ============================================================
 
-# os.makedirs("../saved_models/pg19_models", exist_ok=True)
-# torch.save(
-#     model.state_dict(),
-#     f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
-# )
+os.makedirs("../saved_models/pg19_models", exist_ok=True)
+torch.save(
+    model.state_dict(),
+    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+)
 
 #%%
 # ============================================================
@@ -471,9 +467,9 @@ summary = {
     "max_eval_chars_per_book": max_eval_chars_per_book,
 }
 
-# os.makedirs("../pickle_files", exist_ok=True)
-# with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
-#     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+os.makedirs("../pickle_files", exist_ok=True)
+with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-# print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
+print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%
