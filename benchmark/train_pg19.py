@@ -343,6 +343,9 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
+        # if book_idx < 269:
+        #     continue
+
         train_data_set = PG19SequenceDataset(
             encoded_book,
             short_term_memory=short_term_memory
@@ -356,8 +359,8 @@ for rep in range(1):
         )
 
         # Reset streaming hidden state between books
-        h_ = None
-        model.reset_model()
+        # h_ = None
+        # model.reset_model()
 
         for x, y in tqdm(loader):
             x = x.to(model.device)
