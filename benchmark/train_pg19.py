@@ -15,7 +15,7 @@ import pickle
 from datasets import load_dataset
 
 #%%
-device = "mps"  # change to "cuda" if running on GPU server
+device = "cpu"  # change to "cuda" if running on GPU server
 print("Using device:", device)
 
 #%%
@@ -359,8 +359,8 @@ for rep in range(1):
         )
 
         # Reset streaming hidden state between books
-        # h_ = None
-        # model.reset_model()
+        h_ = None
+        model.reset_model()
 
         for x, y in tqdm(loader):
             x = x.to(model.device)
