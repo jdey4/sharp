@@ -16,7 +16,7 @@ device = "mps"  # torch.device("mps" if torch.backends.mps.is_available() else "
 print("Using device:", device)
 
 # Choose model type here: "rnn", "gru", or "lstm"
-model_type = "gru"
+model_type = "rnn"
 
 #%%
 # Step 1: Download and extract text8
@@ -184,14 +184,14 @@ test_data_set_forward = Dataset_converter(
 # ------------------------------------------------------------
 # Evaluation config
 # ------------------------------------------------------------
-total_model = 1
+total_model = 9
 
 embedding_dim = 100
 hidden_size = 512
 num_layers = 5
 
-model_dir = "/Users/jd/sleep_experiment/saved_models/baselines"
-output_pickle = f"/Users/jd/sleep_experiment/pickle_files/text8_{model_type}_res.pickle"
+model_dir = "/Users/jd/sharp/saved_models/baselines"
+output_pickle = f"/Users/jd/sharp/pickle_files/text8_{model_type}_res.pickle"
 
 acc_forward = []
 bpc_forward = []
