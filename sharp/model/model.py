@@ -376,7 +376,6 @@ class Model(nn.Module):
         # -----------------------------
         # Bottom-up state updates (same as wake, but no grad)
         # -----------------------------
-        # You used self.step to gate stride. For eval, increment too.
         self.step += 1
         t = self.step
 
