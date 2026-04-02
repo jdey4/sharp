@@ -1,4 +1,4 @@
-# SHARP: Sleep-based Hierarchical Accelerated Replay Process for Long Range Non-Stationary Temporal Pattern Recognition
+# SHARP: Sleep-based Hierarchical Accelerated Replay for Long Range Non-Stationary Temporal Pattern Recognition
 
 This repository contains the implementation of a hierarchical memory architecture for **single-pass streaming sequence learning** under non-stationary dynamics, developed by [Jayanta Dey](https://scholar.google.com/citations?user=o0AWbc4AAAAJ&hl=en).
 

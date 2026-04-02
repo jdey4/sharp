@@ -194,7 +194,7 @@ class Model(nn.Module):
                 if self.accelerate is None:
                     stride = self.short_term_memory ** l
                 else:
-                    stride = self.accelerate
+                    stride = self.accelerate**l
                     
                 if t % stride != 0:
                     continue
@@ -313,7 +313,7 @@ class Model(nn.Module):
                         if self.accelerate is None:
                             stride = self.short_term_memory ** layer
                         else:
-                            stride = self.accelerate
+                            stride = self.accelerate ** layer
 
                         if ii%stride != 0:
                             continue
@@ -376,7 +376,6 @@ class Model(nn.Module):
         # -----------------------------
         # Bottom-up state updates (same as wake, but no grad)
         # -----------------------------
-        # You used self.step to gate stride. For eval, increment too.
         self.step += 1
         t = self.step
 
