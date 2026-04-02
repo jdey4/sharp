@@ -12,10 +12,6 @@ from tqdm import tqdm
 import math
 import argparse
 #%%
-device = "cuda"  # or: torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print("Using device:", device)
-
-#%%
 # ============================================================
 # Utilities
 # ============================================================
@@ -141,13 +137,29 @@ parser.add_argument(
     "--model_no",
     type=int,
     default=1,
-    help="Segment index of text8 to train on"
+    help="Segment index of text8 to train on",
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default="cuda",
+    help='Torch device, e.g. "cuda:0", "cuda:1", or "cpu"',
+)
+parser.add_argument(
+    "--cell_type",
+    type=str,
+    default="all",
+    choices=["rnn", "lstm", "gru", "all"],
+    help="Train one of rnn/lstm/gru, or 'all' to run the three sequentially on this device.",
 )
 
 args = parser.parse_args()
 
+device = args.device
 model_no = args.model_no
+print("Using device:", device)
 print("Running model_no:", model_no)
+print("cell_type:", args.cell_type)
 
 # ---- Parameters ----
 total_layers = 5
@@ -174,7 +186,7 @@ loader = DataLoader(train_data_set, batch_size=1, shuffle=False)
 # ============================================================
 # Training function
 # ============================================================
-def run_experiment(cell_type, save_dir="../saved_models/baselines"):
+def run_experiment(cell_type, dev, save_dir="../saved_models/baselines"):
     os.makedirs(save_dir, exist_ok=True)
 
     model = CharRNNBaseline(
@@ -183,7 +195,7 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
         embedding_dim=embedding_dim,
         hidden_size=hidden_size,
         num_layers=total_layers,
-    ).to(device)
+    ).to(dev)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-12)
 
@@ -196,9 +208,9 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
     model.train()
 
     for epoch in range(1):
-        for x, y in tqdm(loader):
-            x = x.to(device)
-            y = y.to(device)
+        for x, y in tqdm(loader, desc=f"{cell_type} m{model_no}"):
+            x = x.to(dev)
+            y = y.to(dev)
 
             logits, h_ = model(x, h_)
             loss = F.cross_entropy(logits, y)
@@ -233,7 +245,8 @@ def run_experiment(cell_type, save_dir="../saved_models/baselines"):
 
 #%%
 # ============================================================
-# Run all three baselines
+# Run baseline(s)
 # ============================================================
-for cell_type in ["rnn", "lstm", "gru"]:
-    run_experiment(cell_type)
+_cell_types = ["rnn", "lstm", "gru"] if args.cell_type == "all" else [args.cell_type]
+for _ct in _cell_types:
+    run_experiment(_ct, device)

@@ -4,7 +4,8 @@ Pre-LN LLaMA-style transformer (RMSNorm, RoPE, SwiGLU) for char-level benchmarks
 
 - **10M-char segments:** `train_text8_transformer.py` — nine runs per config (`--model_no` 1–9), 10M characters each.
 - **100M regime (90M chars per run):** `train_text8_transformer_100M.py` — same four model sizes; checkpoints are written as `..._text8_100M.pt`. Text8 is ~100M characters total, so use `--model_no 1` only (one long run per config, not nine folds).
-- **RNN baselines (100M regime):** `train_text8_baselines_100M.py` — one process trains RNN, LSTM, then GRU sequentially; weights go to `../saved_models/baselines/` as `{rnn,lstm,gru}_model{m}_text8_100M.pt`. GPU is set by the `device = ...` line in that script (not a CLI flag).
+- **text8 eval (100M regime):** `text8_eval_transformer_100M.py` — loads `..._text8_100M.pt`, uses 90M-char segments (`train_sample = 90_000_000`), default `--total_models 1`; writes `../pickle_files/text8_transformer_{size}_res_100M.pickle`.
+- **RNN baselines (100M regime):** `train_text8_baselines_100M.py` — use `--cell_type rnn|lstm|gru` for one baseline per process (and `--device cuda:N` per GPU), or `--cell_type all` to run RNN → LSTM → GRU on one device. Checkpoints: `../saved_models/baselines/{rnn,lstm,gru}_model{m}_text8_100M.pt`.
 
 All commands must be run from the `benchmark/` directory:
 
@@ -86,13 +87,40 @@ python -u train_text8_transformer_100M.py --model_size 5M_ctx20   --model_no 1 -
 
 ## text8 RNN baselines — 100M regime (`train_text8_baselines_100M.py`)
 
-One invocation runs **RNN → LSTM → GRU** back-to-back on the GPU set in the script. Use `--model_no 1` for text8 (90M chars per segment; same constraint as above). Adjust the `device = "cuda:..."` assignment near the top of `train_text8_baselines_100M.py` to match your GPU before running.
+Use `--model_no 1` for text8 (90M training chars per segment). Pick `--cell_type` and `--device` to match your machine. Logging matches the transformer runs: unbuffered Python plus `tee` to a log file under `logs/text8_baselines_100M/`.
+
+**One baseline per process (separate GPUs):**
 
 ```bash
 mkdir -p logs/text8_baselines_100M
 
-python -u train_text8_baselines_100M.py --model_no 1 \
-  2>&1 | tee logs/text8_baselines_100M/baselines_m1.log
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type rnn  --device cuda:0 \
+  2>&1 | tee logs/text8_baselines_100M/rnn_m1.log
+
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type lstm --device cuda:1 \
+  2>&1 | tee logs/text8_baselines_100M/lstm_m1.log
+
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type gru  --device cuda:2 \
+  2>&1 | tee logs/text8_baselines_100M/gru_m1.log
+```
+
+**All three in parallel (background each line; adjust GPU ids):**
+
+```bash
+mkdir -p logs/text8_baselines_100M
+
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type rnn  --device cuda:0 2>&1 | tee logs/text8_baselines_100M/rnn_m1.log   &
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type lstm --device cuda:1 2>&1 | tee logs/text8_baselines_100M/lstm_m1.log &
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type gru  --device cuda:2 2>&1 | tee logs/text8_baselines_100M/gru_m1.log   &
+```
+
+**Sequential on one GPU (same behavior as before the split):**
+
+```bash
+mkdir -p logs/text8_baselines_100M
+
+python -u train_text8_baselines_100M.py --model_no 1 --cell_type all --device cuda:0 \
+  2>&1 | tee logs/text8_baselines_100M/baselines_all_m1.log
 ```
 
 ## text8 evaluation
@@ -104,6 +132,19 @@ python -u text8_eval_transformer.py --model_size 10M       --device cuda:0 2>&1 
 python -u text8_eval_transformer.py --model_size 5M         --device cuda:1 2>&1 | tee logs/text8_eval/5M.log &
 python -u text8_eval_transformer.py --model_size 10M_ctx20  --device cuda:2 2>&1 | tee logs/text8_eval/10M_ctx20.log &
 python -u text8_eval_transformer.py --model_size 5M_ctx20   --device cuda:3 2>&1 | tee logs/text8_eval/5M_ctx20.log &
+```
+
+## text8 evaluation — 100M regime (`text8_eval_transformer_100M.py`)
+
+Evaluates checkpoints from `train_text8_transformer_100M.py`. Default `--total_models 1` matches a single trained model per config. Same forward / backward / current splits as the 10M eval script, but with `train_sample = 90_000_000` and checkpoint names ending in `_text8_100M.pt`.
+
+```bash
+mkdir -p logs/text8_eval_100M
+
+python -u text8_eval_transformer_100M.py --model_size 10M       --device cuda:0 2>&1 | tee logs/text8_eval_100M/10M.log       &
+python -u text8_eval_transformer_100M.py --model_size 5M         --device cuda:1 2>&1 | tee logs/text8_eval_100M/5M.log         &
+python -u text8_eval_transformer_100M.py --model_size 10M_ctx20  --device cuda:2 2>&1 | tee logs/text8_eval_100M/10M_ctx20.log  &
+python -u text8_eval_transformer_100M.py --model_size 5M_ctx20   --device cuda:3 2>&1 | tee logs/text8_eval_100M/5M_ctx20.log   &
 ```
 
 ## PG-19 training + evaluation
