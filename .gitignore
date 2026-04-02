@@ -38,3 +38,5 @@ pip-wheel-metadata/
 
 # Logs
 *.log
+benchmark/text8_eval_logs.zip
+benchmark/log_tail.py
