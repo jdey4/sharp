@@ -21,7 +21,7 @@ from torch.utils.data import DataLoader
 # -----------------------------
 # Device
 # -----------------------------
-device = torch.device("mps")
+device = torch.device("cpu")
 print("Using device:", device)
 
 # -----------------------------
