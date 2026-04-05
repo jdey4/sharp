@@ -57,10 +57,10 @@ class PredictionFiLM(nn.Module):
         if self.context_size > 0 and context is not None:
             gamma, beta = self.film(context).chunk(2, dim=-1)
 
-            gamma = 0.1 * torch.tanh(gamma)
-            beta  = 0.1 * torch.tanh(beta)
+            gamma = torch.tanh(gamma)
+            beta  = torch.tanh(beta)
 
-            z = (1.0 + gamma) * z + beta
+            z = (1+gamma) * z + beta
             z = self.post_film_norm(z)
 
         for i, layer in enumerate(self.layers):

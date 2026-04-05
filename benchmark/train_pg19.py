@@ -378,36 +378,36 @@ for rep in range(1):
         h_ = None
         model.reset_model()
 
-        for x, y in loader:
+        for x, y in tqdm(loader):
             x = x.to(model.device)
             y = y.to(model.device)
 
             logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
-            with torch.no_grad():
-                ii += 1
-                chars_seen += 1
+            # with torch.no_grad():
+            #     ii += 1
+            #     chars_seen += 1
 
-                ring_idx = ii % 1000
-                bpc_train[ring_idx] = compute_bpc(logits, y)
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+            #     ring_idx = ii % 1000
+            #     bpc_train[ring_idx] = compute_bpc(logits, y)
+            #     pred_tok = logits.argmax(dim=-1)
+            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-                if ii % 1000 == 0:
-                    acc = float(np.mean(correct_ring))
-                    bpc = float(np.mean(bpc_train))
+            #     if ii % 1000 == 0:
+            #         acc = float(np.mean(correct_ring))
+            #         bpc = float(np.mean(bpc_train))
 
-                    print(
-                        "Iter", ii,
-                        f"prediction loss: {loss:.8e}",
-                        f"Memory loss: {recon_loss:.8e}",
-                        "Acc:", acc,
-                        "BPC:", bpc,
-                        f"| chars seen in training stream: {chars_seen:,}"
-                    )
+            #         print(
+            #             "Iter", ii,
+            #             f"prediction loss: {loss:.8e}",
+            #             f"Memory loss: {recon_loss:.8e}",
+            #             "Acc:", acc,
+            #             "BPC:", bpc,
+            #             f"| chars seen in training stream: {chars_seen:,}"
+            #         )
 
-                    if model.sleeping:
-                        print("Sleep on", model.recon_loss_ema)
+            #         if model.sleeping:
+            #             print("Sleep on", model.recon_loss_ema)
 
             # if ii % 20000 == 0:
             #     if model.sleeping:
@@ -415,19 +415,19 @@ for rep in range(1):
             #     # print("Total Iter ", ii)
             #     model.sleep_step(total_steps=1025)
             
-            if ii%40000==0:
-                break
+            # if ii%40000==0:
+            #     break
 
 #%%
 # ============================================================
 # Step 7: Save model
 # ============================================================
 
-# os.makedirs("../saved_models/pg19_models", exist_ok=True)
-# torch.save(
-#     model.state_dict(),
-#     f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
-# )
+os.makedirs("../saved_models/pg19_models", exist_ok=True)
+torch.save(
+    model.state_dict(),
+    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+)
 
 #%%
 # ============================================================
@@ -491,9 +491,9 @@ summary = {
     "max_eval_chars_per_book": max_eval_chars_per_book,
 }
 
-# os.makedirs("../pickle_files", exist_ok=True)
-# with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
-#     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+os.makedirs("../pickle_files", exist_ok=True)
+with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-# print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
+print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%
