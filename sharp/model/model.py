@@ -111,6 +111,7 @@ class Model(nn.Module):
         self.store_tags = False
         self.step = 1
         self.context_tags.clear()
+        self.recon_loss_ema = 0.0
         
         for l in range(self.total_layers):
             H = self.hidden_sizes[l]
