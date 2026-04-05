@@ -319,7 +319,22 @@ model = Model(
 
 model.summary()
 
-model.load_state_dict(torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt"))
+# model.load_state_dict(torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt"))
+
+ckpt = torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt", map_location=device)
+model_dict = model.state_dict()
+
+filtered_ckpt = {}
+
+for k, v in ckpt.items():
+    if k.startswith("memories"):
+        # print("Found memory layer 0 weights, loading into model:", k)
+        filtered_ckpt[k] = v
+    # elif k.startswith("heads"):
+    #     filtered_ckpt[k] = v
+
+model_dict.update(filtered_ckpt)
+model.load_state_dict(model_dict)
 #%%
 # ============================================================
 # Step 6: Training loop (1 rep only)
@@ -344,7 +359,7 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx > 1:
+        if book_idx > 0:
             continue
 
         train_data_set = PG19SequenceDataset(
@@ -363,7 +378,7 @@ for rep in range(1):
         h_ = None
         model.reset_model()
 
-        for x, y in tqdm(loader):
+        for x, y in loader:
             x = x.to(model.device)
             y = y.to(model.device)
 
@@ -371,34 +386,34 @@ for rep in range(1):
 
             with torch.no_grad():
                 ii += 1
-            #     chars_seen += 1
+                chars_seen += 1
 
-            #     ring_idx = ii % 1000
-            #     bpc_train[ring_idx] = compute_bpc(logits, y)
-            #     pred_tok = logits.argmax(dim=-1)
-            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+                ring_idx = ii % 1000
+                bpc_train[ring_idx] = compute_bpc(logits, y)
+                pred_tok = logits.argmax(dim=-1)
+                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-            #     if ii % 1000 == 0:
-            #         acc = float(np.mean(correct_ring))
-            #         bpc = float(np.mean(bpc_train))
+                if ii % 1000 == 0:
+                    acc = float(np.mean(correct_ring))
+                    bpc = float(np.mean(bpc_train))
 
-            #         print(
-            #             "Iter", ii,
-            #             f"prediction loss: {loss:.8e}",
-            #             f"Memory loss: {recon_loss:.8e}",
-            #             "Acc:", acc,
-            #             "BPC:", bpc,
-            #             f"| chars seen in training stream: {chars_seen:,}"
-            #         )
+                    print(
+                        "Iter", ii,
+                        f"prediction loss: {loss:.8e}",
+                        f"Memory loss: {recon_loss:.8e}",
+                        "Acc:", acc,
+                        "BPC:", bpc,
+                        f"| chars seen in training stream: {chars_seen:,}"
+                    )
 
-            #         if model.sleeping:
-            #             print("Sleep on", model.recon_loss_ema)
+                    if model.sleeping:
+                        print("Sleep on", model.recon_loss_ema)
 
-            if ii % 20000 == 0:
-                if model.sleeping:
-                    print("Sleep on ", model.recon_loss_ema)
-                # print("Total Iter ", ii)
-                model.sleep_step(total_steps=1025)
+            # if ii % 20000 == 0:
+            #     if model.sleeping:
+            #         print("Sleep on ", model.recon_loss_ema)
+            #     # print("Total Iter ", ii)
+            #     model.sleep_step(total_steps=1025)
             
             if ii%40000==0:
                 break

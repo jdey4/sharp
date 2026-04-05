@@ -36,45 +36,37 @@ class PredictionFiLM(nn.Module):
         self.context_size = context_size
         self.input_size = input_size
 
-        # Base linear layers
+        self.in_norm = nn.LayerNorm(input_size)
+        self.post_film_norm = nn.LayerNorm(input_size)
+
         self.layers = nn.ModuleList()
         for l in range(num_layers):
-            if l == 0:
-                self.layers.append(
-                    nn.Linear(input_size, input_size)
-                )
-            elif l==num_layers-1:
-                self.layers.append(
-                    nn.Linear(input_size, output_size)
-                )
+            if l == num_layers - 1:
+                self.layers.append(nn.Linear(input_size, output_size))
             else:
-                self.layers.append(
-                    nn.Linear(input_size, input_size)
-                )
+                self.layers.append(nn.Linear(input_size, input_size))
 
-
-        # FiLM modulation network (produces gamma, beta)
         if context_size > 0:
-            self.film = nn.Sequential(
-                nn.Linear(context_size, 2 * input_size)
-            )
+            self.film = nn.Linear(context_size, 2 * input_size)
         else:
             self.film = None
 
-    # ----------------------------------------------------------
     def forward(self, z, context=None):
-        """
-        z: (B, T, input_size)
-        context: (B, T, context_size) or None
-        """
+        z = self.in_norm(z)
 
         if self.context_size > 0 and context is not None:
             gamma, beta = self.film(context).chunk(2, dim=-1)
-            z = gamma * z + beta
-        
 
-        # Decode through nonlinear readout
-        for layer in self.layers:
-            z = layer(nn.functional.gelu(z))
-        
+            gamma = 0.1 * torch.tanh(gamma)
+            beta  = 0.1 * torch.tanh(beta)
+
+            z = (1.0 + gamma) * z + beta
+            z = self.post_film_norm(z)
+
+        for i, layer in enumerate(self.layers):
+            if i < len(self.layers) - 1:
+                z = layer(torch.nn.functional.gelu(z))
+            else:
+                z = layer(z)
+
         return z

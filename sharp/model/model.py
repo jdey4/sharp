@@ -236,15 +236,15 @@ class Model(nn.Module):
         
         pred_loss = nn.functional.cross_entropy(logits, y)
 
-        if pred_loss.item() > 1e-4:
+        # if pred_loss.item() > 1e-4:
             # zero grads for all heads (they all participate in the same pred_loss graph)
-            for opt in self.head_wake_opts:
-                opt.zero_grad(set_to_none=True)
+        for opt in self.head_wake_opts:
+            opt.zero_grad(set_to_none=True)
 
-            pred_loss.backward()
+        pred_loss.backward()
 
-            for opt in self.head_wake_opts:
-                opt.step()
+        for opt in self.head_wake_opts:
+            opt.step()
 
         if return_context:
             return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach(), context.detach()
