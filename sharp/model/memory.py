@@ -112,10 +112,7 @@ class Memory(nn.Module):
         # Current window: [x_t, x_{t+1}, ..., x_{t+T-1}]
         # Next window:    [x_{t+1}, x_{t+2}, ..., x_{t+T}]
         # So pass the hidden state at token index 1.
-        if T > 1:
-            h_pass = enc_out[:, 1, :].unsqueeze(0)   # (1, B, H)
-        else:
-            h_pass = enc_out[:, 0, :].unsqueeze(0)   # fallback
+        h_pass = enc_out[:, 0, :].unsqueeze(0)   # fallback
 
         # Final hidden state for decoder init
         h_dec = h_last

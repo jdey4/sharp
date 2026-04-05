@@ -319,6 +319,7 @@ model = Model(
 
 model.summary()
 
+model.load_state_dict(torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt"))
 #%%
 # ============================================================
 # Step 6: Training loop (1 rep only)
@@ -343,8 +344,8 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        # if book_idx < 269:
-        #     continue
+        if book_idx > 1:
+            continue
 
         train_data_set = PG19SequenceDataset(
             encoded_book,
@@ -394,19 +395,24 @@ for rep in range(1):
             #             print("Sleep on", model.recon_loss_ema)
 
             if ii % 20000 == 0:
+                if model.sleeping:
+                    print("Sleep on ", model.recon_loss_ema)
                 # print("Total Iter ", ii)
                 model.sleep_step(total_steps=1025)
+            
+            if ii%40000==0:
+                break
 
 #%%
 # ============================================================
 # Step 7: Save model
 # ============================================================
 
-os.makedirs("../saved_models/pg19_models", exist_ok=True)
-torch.save(
-    model.state_dict(),
-    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
-)
+# os.makedirs("../saved_models/pg19_models", exist_ok=True)
+# torch.save(
+#     model.state_dict(),
+#     f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+# )
 
 #%%
 # ============================================================
@@ -470,9 +476,9 @@ summary = {
     "max_eval_chars_per_book": max_eval_chars_per_book,
 }
 
-os.makedirs("../pickle_files", exist_ok=True)
-with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
-    pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
+# os.makedirs("../pickle_files", exist_ok=True)
+# with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+#     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
+# print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
 # %%
