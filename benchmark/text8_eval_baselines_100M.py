@@ -1,6 +1,7 @@
 #%%
 from sharp.utils import compute_bpc
 
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -10,13 +11,49 @@ import os
 import zipfile
 import urllib.request
 import pickle
+from tqdm import tqdm
 
 #%%
-device = "cuda"  # torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print("Using device:", device)
+parser = argparse.ArgumentParser(
+    description="Evaluate RNN/LSTM/GRU checkpoints from train_text8_baselines_100M.py (text8_100M.pt)."
+)
+parser.add_argument(
+    "--model_type",
+    type=str,
+    default="rnn",
+    choices=["rnn", "lstm", "gru"],
+    help="Recurrent baseline matching the trained checkpoint.",
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default="cuda",
+    help='Torch device, e.g. "cuda:0", "cuda:1", or "cpu".',
+)
+parser.add_argument(
+    "--model_dir",
+    type=str,
+    default="../saved_models/baselines",
+    help="Directory containing {rnn,lstm,gru}_model{m}_text8_100M.pt",
+)
+parser.add_argument(
+    "--total_models",
+    type=int,
+    default=1,
+    help="Number of checkpoints to evaluate (model_no 1..N). Use 1 for the standard 100M text8 run.",
+)
+parser.add_argument(
+    "--pickle_dir",
+    type=str,
+    default="../pickle_files",
+    help="Where to write text8_{model_type}_res_100M.pickle",
+)
+args = parser.parse_args()
 
-# Choose model type here: "rnn", "gru", or "lstm"
-model_type = "rnn"
+device = args.device
+model_type = args.model_type
+print("Using device:", device)
+print("model_type:", model_type)
 
 #%%
 # Step 1: Download and extract text8
@@ -125,7 +162,7 @@ class CharRNNBaseline(nn.Module):
 
 #%%
 @torch.no_grad()
-def evaluate_rnn_model(model, dataset, batch_size=1, device="cpu"):
+def evaluate_rnn_model(model, dataset, batch_size=1, device="cpu", desc="eval"):
     """
     Evaluate average accuracy and BPC on a dataset.
     Hidden state is passed through the evaluation stream sequentially.
@@ -138,7 +175,7 @@ def evaluate_rnn_model(model, dataset, batch_size=1, device="cpu"):
     total_count = 0
     h = None
 
-    for x, y in loader:
+    for x, y in tqdm(loader, desc=desc, leave=False):
         x = x.to(device)
         y = y.to(device)
 
@@ -159,7 +196,7 @@ def evaluate_rnn_model(model, dataset, batch_size=1, device="cpu"):
         if computed_bpc > 4.75:
             computed_bpc = 4.75
 
-        total_bpc += computed_bpc* x.size(0)
+        total_bpc += computed_bpc * x.size(0)
         total_count += x.size(0)
 
     avg_acc = total_correct / max(total_count, 1)
@@ -184,14 +221,13 @@ test_data_set_forward = Dataset_converter(
 # ------------------------------------------------------------
 # Evaluation config
 # ------------------------------------------------------------
-total_model = 1
-
 embedding_dim = 100
 hidden_size = 512
 num_layers = 5
 
-model_dir = "../saved_models/baselines"
-output_pickle = f"../pickle_files/text8_{model_type}_res_100M.pickle"
+model_dir = args.model_dir
+os.makedirs(args.pickle_dir, exist_ok=True)
+output_pickle = os.path.join(args.pickle_dir, f"text8_{model_type}_res_100M.pickle")
 
 acc_forward = []
 bpc_forward = []
@@ -200,7 +236,7 @@ bpc_backward = []
 acc_current = []
 bpc_current = []
 
-for model_no in range(1, total_model + 1):
+for model_no in range(1, args.total_models + 1):
     print(f"\nEvaluating {model_type.upper()} model {model_no}")
 
     test_data_set_backward = Dataset_converter(
@@ -232,26 +268,32 @@ for model_no in range(1, total_model + 1):
     state_dict = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state_dict)
 
-    avg_acc, avg_bpc = evaluate_rnn_model(model, test_data_set_forward, device=device)
+    avg_acc, avg_bpc = evaluate_rnn_model(
+        model, test_data_set_forward, device=device, desc=f"eval forward m{model_no}"
+    )
     print("Forward accuracy", avg_acc)
     print("Forward BPC", avg_bpc)
     acc_forward.append(avg_acc)
     bpc_forward.append(avg_bpc)
 
-    avg_acc, avg_bpc = evaluate_rnn_model(model, test_data_set_backward, device=device)
+    avg_acc, avg_bpc = evaluate_rnn_model(
+        model, test_data_set_backward, device=device, desc=f"eval backward m{model_no}"
+    )
     print("Backward accuracy", avg_acc)
     print("Backward BPC", avg_bpc)
     acc_backward.append(avg_acc)
     bpc_backward.append(avg_bpc)
 
-    avg_acc, avg_bpc = evaluate_rnn_model(model, test_data_set_current, device=device)
+    avg_acc, avg_bpc = evaluate_rnn_model(
+        model, test_data_set_current, device=device, desc=f"eval current m{model_no}"
+    )
     print("Current accuracy", avg_acc)
     print("Current BPC", avg_bpc)
     acc_current.append(avg_acc)
     bpc_current.append(avg_bpc)
 
 print("\n================ FINAL SUMMARY ================")
-print("Model type:", model_type.upper())
+print("Model type:", model_type.upper(), "| 100M regime")
 print("Average forward accuracy", np.mean(acc_forward), "+-", np.std(acc_forward, ddof=1))
 print("Average forward BPC", np.mean(bpc_forward), "+-", np.std(bpc_forward, ddof=1))
 print("Average backward accuracy", np.mean(acc_backward), "+-", np.std(acc_backward, ddof=1))

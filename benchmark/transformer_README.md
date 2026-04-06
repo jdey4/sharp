@@ -6,6 +6,7 @@ Pre-LN LLaMA-style transformer (RMSNorm, RoPE, SwiGLU) for char-level benchmarks
 - **100M regime (90M chars per run):** `train_text8_transformer_100M.py` — same four model sizes; checkpoints are written as `..._text8_100M.pt`. Text8 is ~100M characters total, so use `--model_no 1` only (one long run per config, not nine folds).
 - **text8 eval (100M regime):** `text8_eval_transformer_100M.py` — loads `..._text8_100M.pt`, uses 90M-char segments (`train_sample = 90_000_000`), default `--total_models 1`; writes `../pickle_files/text8_transformer_{size}_res_100M.pickle`.
 - **RNN baselines (100M regime):** `train_text8_baselines_100M.py` — use `--cell_type rnn|lstm|gru` for one baseline per process (and `--device cuda:N` per GPU), or `--cell_type all` to run RNN → LSTM → GRU on one device. Checkpoints: `../saved_models/baselines/{rnn,lstm,gru}_model{m}_text8_100M.pt`.
+- **text8 RNN baseline eval (100M regime):** `text8_eval_baselines_100M.py` — `--model_type rnn|lstm|gru` for each checkpoint; loads `..._text8_100M.pt`, uses 90M-char segments; default `--total_models 1`; writes `../pickle_files/text8_{rnn|lstm|gru}_res_100M.pickle`.
 
 All commands must be run from the `benchmark/` directory:
 
@@ -146,6 +147,37 @@ python -u text8_eval_transformer_100M.py --model_size 5M         --device cuda:1
 python -u text8_eval_transformer_100M.py --model_size 10M_ctx20  --device cuda:2 2>&1 | tee logs/text8_eval_100M/10M_ctx20.log  &
 python -u text8_eval_transformer_100M.py --model_size 5M_ctx20   --device cuda:3 2>&1 | tee logs/text8_eval_100M/5M_ctx20.log   &
 ```
+
+## text8 RNN baselines evaluation — 100M regime (`text8_eval_baselines_100M.py`)
+
+Evaluates checkpoints from `train_text8_baselines_100M.py` (`{rnn,lstm,gru}_model{m}_text8_100M.pt`). Default `--total_models 1` matches `--model_no 1` training. Pick `--model_type` and `--device` to match your setup; logs use the same `python -u` + `tee` pattern as other eval scripts.
+
+**One baseline per GPU (sequential commands):**
+
+```bash
+mkdir -p logs/text8_eval_baselines_100M
+
+python -u text8_eval_baselines_100M.py --model_type rnn  --device cuda:0 \
+  2>&1 | tee logs/text8_eval_baselines_100M/rnn.log
+
+python -u text8_eval_baselines_100M.py --model_type lstm --device cuda:1 \
+  2>&1 | tee logs/text8_eval_baselines_100M/lstm.log
+
+python -u text8_eval_baselines_100M.py --model_type gru  --device cuda:2 \
+  2>&1 | tee logs/text8_eval_baselines_100M/gru.log
+```
+
+**All three in parallel (background each line; adjust GPU ids):**
+
+```bash
+mkdir -p logs/text8_eval_baselines_100M
+
+python -u text8_eval_baselines_100M.py --model_type rnn  --device cuda:0 2>&1 | tee logs/text8_eval_baselines_100M/rnn.log   &
+python -u text8_eval_baselines_100M.py --model_type lstm --device cuda:1 2>&1 | tee logs/text8_eval_baselines_100M/lstm.log &
+python -u text8_eval_baselines_100M.py --model_type gru  --device cuda:2 2>&1 | tee logs/text8_eval_baselines_100M/gru.log   &
+```
+
+Optional: `--model_dir` (default `../saved_models/baselines`), `--pickle_dir` (default `../pickle_files`), `--total_models` if you trained multiple segments.
 
 ## PG-19 training + evaluation
 
