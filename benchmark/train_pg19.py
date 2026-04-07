@@ -359,7 +359,7 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx > 10:
+        if book_idx > 2:
             continue
 
         train_data_set = PG19SequenceDataset(
