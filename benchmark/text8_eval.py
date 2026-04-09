@@ -80,7 +80,7 @@ vocab_size = 27
 
 test_data_set_forward = Dataset_converter(encoded[-1000000:], 1, short_term_memory=short_term_memory)
 #%%
-total_model = 1
+total_model = 3
 acc_forward = []
 bpc_forward = []
 acc_backward = []
