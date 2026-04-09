@@ -18,6 +18,7 @@ class Model(nn.Module):
             embedding_dim = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
+            lr_slowdown_factor = 0.1,
             recon_threshold = 1e-3,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
@@ -85,7 +86,7 @@ class Model(nn.Module):
 
         self.head_wake_opts = []
         for l, head in enumerate(self.heads):
-            lr_l = self.lr_layers * (0.1 ** l)   # head 0: lr, head 1: lr/10, head 2: lr/100, ...
+            lr_l = self.lr_layers * (self.lr_slowdown_factor ** l)   # head 0: lr, head 1: lr/10, head 2: lr/100, ...
             self.head_wake_opts.append(
                 self.optimizer_class(head.parameters(), lr=lr_l, **opt_kwargs)
             )
