@@ -160,7 +160,7 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 short_term_memory = 4
 train_tokens = 5_000_000
 eval_tokens = 300_000          # keep smaller for speed; change to 1_000_000 if you want
-eval_every = 30_000
+eval_every = 300_000
 sleep_every = 20_000
 sleep_total_steps = 1025
 

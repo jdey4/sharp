@@ -330,8 +330,8 @@ for k, v in ckpt.items():
     if k.startswith("memories"):
         # print("Found memory layer 0 weights, loading into model:", k)
         filtered_ckpt[k] = v
-    # elif k.startswith("heads"):
-    #     filtered_ckpt[k] = v
+    elif k.startswith("heads"):
+        filtered_ckpt[k] = v
 
 model_dict.update(filtered_ckpt)
 model.load_state_dict(model_dict)
@@ -359,7 +359,7 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx > 10:
+        if book_idx < 11 or book_idx>20:
             continue
 
         train_data_set = PG19SequenceDataset(
