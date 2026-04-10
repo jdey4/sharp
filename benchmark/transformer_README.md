@@ -4,6 +4,7 @@ Pre-LN LLaMA-style transformer (RMSNorm, RoPE, SwiGLU) for char-level benchmarks
 
 - **10M-char segments:** `train_text8_transformer.py` — nine runs per config (`--model_no` 1–9), 10M characters each.
 - **100M regime (90M chars per run):** `train_text8_transformer_100M.py` — same four model sizes; checkpoints are written as `..._text8_100M.pt`. Text8 is ~100M characters total, so use `--model_no 1` only (one long run per config, not nine folds).
+- **Sharp hierarchical model (100M regime):** `train_text8_100M.py` — trains `sharp.model.Model` on 90M characters; writes `../saved_models/model{m}_text8_100M.pt`. No CLI: set `device` and `model_no` in the script before running.
 - **text8 eval (100M regime):** `text8_eval_transformer_100M.py` — loads `..._text8_100M.pt`, uses 90M-char segments (`train_sample = 90_000_000`), default `--total_models 1`; writes `../pickle_files/text8_transformer_{size}_res_100M.pickle`.
 - **RNN baselines (100M regime):** `train_text8_baselines_100M.py` — use `--cell_type rnn|lstm|gru` for one baseline per process (and `--device cuda:N` per GPU), or `--cell_type all` to run RNN → LSTM → GRU on one device. Checkpoints: `../saved_models/baselines/{rnn,lstm,gru}_model{m}_text8_100M.pt`.
 - **text8 RNN baseline eval (100M regime):** `text8_eval_baselines_100M.py` — `--model_type rnn|lstm|gru` for each checkpoint; loads `..._text8_100M.pt`, uses 90M-char segments; default `--total_models 1`; writes `../pickle_files/text8_{rnn|lstm|gru}_res_100M.pickle`.
@@ -84,6 +85,16 @@ python -u train_text8_transformer_100M.py --model_size 10M       --model_no 1 --
 python -u train_text8_transformer_100M.py --model_size 5M         --model_no 1 --device cuda:1 2>&1 | tee logs/text8_100M/5M_m1.log         &
 python -u train_text8_transformer_100M.py --model_size 10M_ctx20  --model_no 1 --device cuda:2 2>&1 | tee logs/text8_100M/10M_ctx20_m1.log  &
 python -u train_text8_transformer_100M.py --model_size 5M_ctx20   --model_no 1 --device cuda:3 2>&1 | tee logs/text8_100M/5M_ctx20_m1.log   &
+```
+
+## Sharp hierarchical model — text8 100M (`train_text8_100M.py`)
+
+Trains the Sharp hierarchical `Model` on text8 (90M training characters for `model_no = 1` in the script). Checkpoint: `../saved_models/model{m}_text8_100M.pt`. Set `device` (and `model_no` if needed) at the top of `train_text8_100M.py` before launching; default in-repo is often `cpu`.
+
+```bash
+mkdir -p logs/text8_sharp_100M
+
+python -u train_text8_100M.py 2>&1 | tee logs/text8_sharp_100M/train_m1.log
 ```
 
 ## text8 RNN baselines — 100M regime (`train_text8_baselines_100M.py`)
