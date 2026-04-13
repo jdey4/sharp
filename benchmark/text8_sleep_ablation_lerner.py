@@ -1,12 +1,3 @@
-#%%
-# ============================================================
-# text8 sleep ablation
-# - train on 5M tokens
-# - compare sleep vs no sleep
-# - evaluate every 30k training tokens
-# - save results as a pickle dataframe
-# ============================================================
-
 from sharp.utils import compute_bpc
 from sharp.model.model import Model
 
@@ -20,11 +11,12 @@ from tqdm import tqdm
 import pandas as pd
 import pickle
 import copy
+from joblib import Parallel, delayed
 
 # ============================================================
 # Device
 # ============================================================
-device = "cpu"   # change to "mps" or "cuda" if desired
+device = "cpu"   # parallel only recommended on CPU
 print("Using device:", device)
 
 # ============================================================
@@ -34,7 +26,7 @@ def download_text8(path="dataset/text8.zip"):
     url = "http://mattmahoney.net/dc/text8.zip"
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
-        print("Downloading text8...")
+        print("Downloading text8...", flush=True)
         urllib.request.urlretrieve(url, path)
 
     with zipfile.ZipFile(path) as zf:
@@ -54,7 +46,7 @@ def encode(text, stoi):
 
 
 # ============================================================
-# Memory-efficient dataset
+# Dataset
 # ============================================================
 class SequenceDataset(Dataset):
     def __init__(self, encoded_text, short_term_memory=4):
@@ -68,50 +60,36 @@ class SequenceDataset(Dataset):
     def __getitem__(self, index):
         x = self.encoded_text[index:index + self.short_term_memory]
         y = self.encoded_text[index + self.short_term_memory]
-
-        x = torch.tensor(x, dtype=torch.long)
-        y = torch.tensor(y, dtype=torch.long)
-        return x, y
+        return (
+            torch.tensor(x, dtype=torch.long),
+            torch.tensor(y, dtype=torch.long),
+        )
 
 
 # ============================================================
-# Build model
-# Keeping your current text8 settings
+# Model
 # ============================================================
 def build_model(device, use_sleep=False):
     model = Model(
-        total_layers=5,
+        total_layers=3,
         num_layers_prediction_head=2,
-
-        # ---- Layer sizes ----
         vocab_size=27,
-        hidden_sizes=[128, 128, 128, 128, 128],
+        hidden_sizes=[512, 512, 512],
         embedding_dim=100,
-
-        # ---- Learning rates ----
         lr_layers=1e-4,
-
-        # ---- Optimizer ----
         optimizer_class=torch.optim.Adam,
-        optimizer_kwargs={
-            "weight_decay": 1e-12
-        },
-
-        # ---- Sleep hyperparameters ----
+        optimizer_kwargs={"weight_decay": 1e-12},
         short_term_memory=4,
-        context_tag_buffer_size=20,
-
-        # ---- Misc ----
+        context_tag_buffer_size=50,
         recon_threshold=1e-2,
-        bad_init=not use_sleep,
-        device=device
+        bad_init=True, 
+        device=device,
     )
     return model
 
 
 # ============================================================
-# Evaluation helper
-# Important: use a fresh eval model so training state is untouched
+# Eval helper
 # ============================================================
 @torch.no_grad()
 def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None):
@@ -125,7 +103,7 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
         batch_size=1,
         shuffle=False,
         num_workers=0,
-        pin_memory=False
+        pin_memory=False,
     )
 
     total_bpc = 0.0
@@ -149,60 +127,52 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 
     avg_bpc = total_bpc / max(total_count, 1)
     avg_acc = total_correct / max(total_count, 1)
-
     del eval_model
     return avg_bpc, avg_acc
 
 
 # ============================================================
-# Experiment settings
+# Settings
 # ============================================================
 short_term_memory = 4
 train_tokens = 5_000_000
-eval_tokens = 300_000          # keep smaller for speed; change to 1_000_000 if you want
+eval_tokens = 300_000
 eval_every = 300_000
 sleep_every = 20_000
-sleep_total_steps = 1025
+sleep_total_steps = 65
 
-save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_30k.pickle"
+save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_300k_parallel.pickle"
+partial_dir = "../pickle_files/text8_sleep_ablation_partial"
+model_dir = "../saved_models/text8_sleep_ablation_parallel"
+
+os.makedirs(partial_dir, exist_ok=True)
+os.makedirs(model_dir, exist_ok=True)
 
 # ============================================================
-# Load text8 once
+# Data loaded once in parent; each worker gets serialized copy
 # ============================================================
 text = download_text8()
 stoi, itos = build_vocab(text)
 encoded = encode(text, stoi)
 
-# text8 should be 27-char vocab
-vocab_size = len(stoi)
-print("Vocabulary size:", vocab_size)
-
-# Train on first 5M, evaluate on the next held-out slice
 train_encoded = encoded[:train_tokens]
 eval_encoded = encoded[train_tokens:train_tokens + eval_tokens]
 
-train_dataset = SequenceDataset(train_encoded, short_term_memory=short_term_memory)
-eval_dataset = SequenceDataset(eval_encoded, short_term_memory=short_term_memory)
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=1,
-    shuffle=False,
-    num_workers=0,
-    pin_memory=False
-)
-
-print("Train examples:", len(train_dataset))
-print("Eval examples:", len(eval_dataset))
-
-# ============================================================
-# Run both conditions
-# ============================================================
-results = []
-
-for use_sleep in [False, True]:
+def run_condition(use_sleep, worker_id):
     mode = "sleep" if use_sleep else "no_sleep"
-    print(f"\n==================== Running mode: {mode} ====================")
+    print(f"\n==================== Running mode: {mode} ====================", flush=True)
+
+    train_dataset = SequenceDataset(train_encoded, short_term_memory=short_term_memory)
+    eval_dataset = SequenceDataset(eval_encoded, short_term_memory=short_term_memory)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+    )
 
     model = build_model(device, use_sleep=use_sleep)
     model.summary()
@@ -211,12 +181,21 @@ for use_sleep in [False, True]:
 
     ii = 0
     h_ = None
+    results = []
 
-    # optional train-side logging
     correct_ring = np.zeros(1000, dtype=np.float32)
     bpc_ring = np.zeros(1000, dtype=np.float32)
 
-    for x, y in tqdm(train_loader, desc=f"Training ({mode})"):
+    partial_path = os.path.join(partial_dir, f"{mode}_partial.pkl")
+
+    pbar = tqdm(
+        train_loader,
+        desc=f"Training ({mode})",
+        position=worker_id,
+        leave=True,
+    )
+
+    for x, y in pbar:
         x = x.to(device)
         y = y.to(device)
 
@@ -227,35 +206,20 @@ for use_sleep in [False, True]:
             ring_idx = ii % 1000
             bpc_ring[ring_idx] = float(compute_bpc(logits, y))
             pred_tok = logits.argmax(dim=-1)
-            correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+            correct_ring[ring_idx] = float((pred_tok[0] == y[0]).item())
 
-        # sleep on / off
         if use_sleep and ii % sleep_every == 0:
             model.sleep_step(total_steps=sleep_total_steps)
 
-        # evaluate every 30k training tokens
         if ii % eval_every == 0:
             eval_bpc, eval_acc = evaluate_checkpoint(
                 train_model=model,
                 eval_dataset=eval_dataset,
                 device=device,
-                max_eval_tokens=None  # set to an int if you want even faster eval
+                max_eval_tokens=None,
             )
 
-            train_acc = float(np.mean(correct_ring))
-            train_bpc = float(np.mean(bpc_ring))
-
-            print(
-                f"[{mode}] step={ii:,} | "
-                f"train loss={loss:.6e} | "
-                f"recon loss={recon_loss:.6e} | "
-                f"train acc={train_acc:.4f} | "
-                f"train bpc={train_bpc:.4f} | "
-                f"eval acc={eval_acc:.4f} | "
-                f"eval bpc={eval_bpc:.4f}"
-            )
-
-            results.append({
+            row = {
                 "condition": mode,
                 "sleep": int(use_sleep),
                 "samples seen": ii,
@@ -263,19 +227,33 @@ for use_sleep in [False, True]:
                 "eval_acc": eval_acc,
                 "train_loss": float(loss),
                 "recon_loss": float(recon_loss),
-                "train_acc_window": train_acc,
-                "train_bpc_window": train_bpc,
-            })
+                "train_acc_window": float(np.mean(correct_ring)),
+                "train_bpc_window": float(np.mean(bpc_ring)),
+            }
+            results.append(row)
 
-    # final eval if last step is not exactly divisible by eval_every
+            pd.DataFrame(results).to_pickle(partial_path)
+
+            print(
+                f"[{mode}] step={ii:,} | "
+                f"train loss={float(loss):.6e} | "
+                f"recon loss={float(recon_loss):.6e} | "
+                f"train acc={row['train_acc_window']:.4f} | "
+                f"train bpc={row['train_bpc_window']:.4f} | "
+                f"eval acc={eval_acc:.4f} | "
+                f"eval bpc={eval_bpc:.4f}",
+                flush=True,
+            )
+
     if ii % eval_every != 0:
         eval_bpc, eval_acc = evaluate_checkpoint(
             train_model=model,
             eval_dataset=eval_dataset,
             device=device,
-            max_eval_tokens=None
+            max_eval_tokens=None,
         )
-        results.append({
+
+        row = {
             "condition": mode,
             "sleep": int(use_sleep),
             "samples seen": ii,
@@ -285,23 +263,28 @@ for use_sleep in [False, True]:
             "recon_loss": float(recon_loss),
             "train_acc_window": float(np.mean(correct_ring)),
             "train_bpc_window": float(np.mean(bpc_ring)),
-        })
+        }
+        results.append(row)
+        pd.DataFrame(results).to_pickle(partial_path)
 
-    # save final model for each condition
-    out_dir = "../saved_models/text8_sleep_ablation"
-    os.makedirs(out_dir, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(out_dir, f"{mode}_5M_text8.pt"))
+    torch.save(model.state_dict(), os.path.join(model_dir, f"{mode}_5M_text8.pt"))
 
-# ============================================================
-# Save results
-# ============================================================
-df = pd.DataFrame(results)
-os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    return results
 
-with open(save_path, "wb") as f:
-    pickle.dump(df, f)
 
-print("\nSaved results to:", save_path)
-print(df.head())
-print(df.tail())
-# %%
+if __name__ == "__main__":
+    all_results = Parallel(n_jobs=2, backend="loky", verbose=10)(
+        delayed(run_condition)(use_sleep, worker_id=i)
+        for i, use_sleep in enumerate([False, True])
+    )
+
+    flat_results = [row for worker_rows in all_results for row in worker_rows]
+    df = pd.DataFrame(flat_results).sort_values(["condition", "samples seen"]).reset_index(drop=True)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, "wb") as f:
+        pickle.dump(df, f)
+
+    print("\nSaved results to:", save_path, flush=True)
+    print(df.head(), flush=True)
+    print(df.tail(), flush=True)

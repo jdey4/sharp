@@ -99,7 +99,7 @@ for model_no in range(1, total_model+1):
 
             # ---- Layer sizes ----
             vocab_size = vocab_size,                  # layer 0 input dimension
-            hidden_sizes = [128, 128, 128, 128, 128],    # H0, H1, H2
+            hidden_sizes = [512, 512, 512, 512, 512],    # H0, H1, H2
             embedding_dim = 100,
 
             # ---- Learning rates per layer ----
