@@ -84,11 +84,10 @@ The model is lightweight compared to large transformer-based systems, but datase
 
 ## Setup Instructions
 
-### 1. Clone the repository
+### 1. Change directory to SHARP
 
 ```bash
-git clone https://github.com/jdey4/sleep_experiment.git
-cd sleep_experiment
+cd sharp
 ```
 
 ### 2. Create environment (recommended)
