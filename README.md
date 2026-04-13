@@ -29,9 +29,7 @@ It leverages **accelerated sequential replay during sleep phases** to extend eff
 
 ## Core Idea
 
-Traditional models conflate memory with weight updates via gradient descent.
-
-This work instead decomposes learning into:
+Traditional models conflate memory with pattern recognition. This work instead decomposes learning into:
 
 - **Memory (no credit assignment)**  
 - **Pattern Recognition (with credit assignment)**  
