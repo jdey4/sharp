@@ -74,14 +74,14 @@ def build_model(device, use_sleep=False):
         total_layers=3,
         num_layers_prediction_head=2,
         vocab_size=27,
-        hidden_sizes=[512, 512, 512],
-        embedding_dim=100,
+        hidden_sizes=[128, 128, 128],
+        embedding_dim=30,
         lr_layers=1e-4,
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
         short_term_memory=4,
         context_tag_buffer_size=50,
-        recon_threshold=1e-2,
+        recon_threshold=1e-1,
         bad_init=True, 
         device=device,
     )
@@ -135,7 +135,7 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 # Settings
 # ============================================================
 short_term_memory = 4
-train_tokens = 5_000_000
+train_tokens = 50_000_000
 eval_tokens = 300_000
 eval_every = 300_000
 sleep_every = 20_000
