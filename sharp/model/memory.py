@@ -35,7 +35,7 @@ class Memory(nn.Module):
         # --------------------------------------------------
         # Initialization
         # --------------------------------------------------
-        if self.bad_init:
+        if self.bad_init and self.layer != 0:
             # deliberately weak / bad reservoir-like dynamics
             self._init_ablation_lsm(self.encoder)
         else:
@@ -63,7 +63,7 @@ class Memory(nn.Module):
             elif "bias" in name:
                 nn.init.zeros_(param)
 
-    def _init_ablation_lsm(self, rnn, spectral_radius=0.15, input_scale=0.05, hh_scale=0.1):
+    def _init_ablation_lsm(self, rnn, spectral_radius=1e-5, input_scale=0.005, hh_scale=0.1):
         """
         Initialize the encoder as a weak but trainable reservoir:
         - weak input weights
