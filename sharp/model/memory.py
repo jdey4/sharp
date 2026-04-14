@@ -63,7 +63,7 @@ class Memory(nn.Module):
             elif "bias" in name:
                 nn.init.zeros_(param)
 
-    def _init_ablation_lsm(self, rnn, spectral_radius=1e-100, input_scale=0.05):
+    def _init_ablation_lsm(self, rnn, spectral_radius=1e-10, input_scale=0.05):
         """
         Initialize the encoder as a deliberately poor reservoir / poor LSM:
           - weak input weights

@@ -71,11 +71,11 @@ class SequenceDataset(Dataset):
 # ============================================================
 def build_model(device, use_sleep=False):
     model = Model(
-        total_layers=3,
+        total_layers=2,
         num_layers_prediction_head=2,
         vocab_size=27,
-        hidden_sizes=[128, 128, 128],
-        embedding_dim=30,
+        hidden_sizes=[256, 256],
+        embedding_dim=50,
         lr_layers=1e-4,
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
@@ -156,7 +156,7 @@ stoi, itos = build_vocab(text)
 encoded = encode(text, stoi)
 
 train_encoded = encoded[:train_tokens]
-eval_encoded = encoded[train_tokens:train_tokens + eval_tokens]
+eval_encoded = encoded[90_000_000:90_000_000 + eval_tokens]
 
 
 def run_condition(use_sleep, worker_id):
