@@ -63,14 +63,14 @@ class Memory(nn.Module):
             elif "bias" in name:
                 nn.init.zeros_(param)
 
-    def _init_ablation_lsm(self, rnn, spectral_radius=1e-10, input_scale=0.05):
+    def _init_ablation_lsm(self, rnn, spectral_radius=0.15, input_scale=0.05, hh_scale=0.1):
         """
-        Initialize the encoder as a deliberately poor reservoir / poor LSM:
-          - weak input weights
-          - very contractive recurrent weights
-          - zero bias
+        Initialize the encoder as a weak but trainable reservoir:
+        - weak input weights
+        - random recurrent weights with small spectral radius
+        - zero bias
 
-        This makes long-timescale persistence much weaker.
+        This weakens long-timescale persistence without collapsing the dynamics.
         """
         with torch.no_grad():
             for name, param in rnn.named_parameters():
@@ -78,16 +78,14 @@ class Memory(nn.Module):
                     param.normal_(mean=0.0, std=input_scale)
 
                 elif "weight_hh" in name:
-                    param.normal_(mean=0.0, std=0.05)
+                    param.normal_(mean=0.0, std=hh_scale)
 
-                    # rescale to small spectral radius
                     W = param.data
                     try:
                         eigvals = torch.linalg.eigvals(W).abs()
                         rho = eigvals.max().real.clamp_min(1e-6)
                         param.mul_(spectral_radius / rho)
                     except Exception:
-                        # fallback if eigvals fails
                         param.mul_(spectral_radius / (param.norm() + 1e-6))
 
                 elif "bias" in name:

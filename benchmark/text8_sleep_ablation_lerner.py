@@ -80,7 +80,7 @@ def build_model(device, use_sleep=False):
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
         short_term_memory=4,
-        context_tag_buffer_size=50,
+        context_tag_buffer_size=1000,
         recon_threshold=1e-1,
         bad_init=True, 
         device=device,
@@ -139,7 +139,7 @@ train_tokens = 50_000_000
 eval_tokens = 300_000
 eval_every = 300_000
 sleep_every = 20_000
-sleep_total_steps = 65
+sleep_total_steps = 17
 
 save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_300k_parallel.pickle"
 partial_dir = "../pickle_files/text8_sleep_ablation_partial"
