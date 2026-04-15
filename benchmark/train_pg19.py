@@ -359,7 +359,7 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx < 81 or book_idx>100:
+        if book_idx < 259 or book_idx>271:
             continue
 
         train_data_set = PG19SequenceDataset(
@@ -378,33 +378,33 @@ for rep in range(1):
         # h_ = None
         # model.reset_model()
 
-        for x, y in loader:
+        for x, y in tqdm(loader):
             x = x.to(model.device)
             y = y.to(model.device)
 
             logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
-            with torch.no_grad():
-                ii += 1
-                chars_seen += 1
+            # with torch.no_grad():
+            #     ii += 1
+            #     chars_seen += 1
 
-                ring_idx = ii % 1000
-                bpc_train[ring_idx] = compute_bpc(logits, y)
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+            #     ring_idx = ii % 1000
+            #     bpc_train[ring_idx] = compute_bpc(logits, y)
+            #     pred_tok = logits.argmax(dim=-1)
+            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-                if ii % 1000 == 0:
-                    acc = float(np.mean(correct_ring))
-                    bpc = float(np.mean(bpc_train))
+            #     if ii % 1000 == 0:
+            #         acc = float(np.mean(correct_ring))
+            #         bpc = float(np.mean(bpc_train))
 
-                    print(
-                        "Iter", ii,
-                        f"prediction loss: {loss:.8e}",
-                        f"Memory loss: {recon_loss:.8e}",
-                        "Acc:", acc,
-                        "BPC:", bpc,
-                        f"| chars seen in training stream: {chars_seen:,}"
-                    )
+            #         print(
+            #             "Iter", ii,
+            #             f"prediction loss: {loss:.8e}",
+            #             f"Memory loss: {recon_loss:.8e}",
+            #             "Acc:", acc,
+            #             "BPC:", bpc,
+            #             f"| chars seen in training stream: {chars_seen:,}"
+            #         )
 
             # if ii % 20000 == 0:
             #     if model.sleeping:

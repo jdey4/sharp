@@ -35,15 +35,15 @@ scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 # ------------------------------------------------------------
 # Choose baseline type here
 # ------------------------------------------------------------
-model_type = "gru"   # options: "rnn", "gru", "lstm"
+model_type = "lstm"   # options: "rnn", "gru", "lstm"
 
 
 # ------------------------------------------------------------
 # Training speed knobs
 # ------------------------------------------------------------
-stream_batch_size = 128   # number of parallel streams within a book
+stream_batch_size = 10   # number of parallel streams within a book
 short_term_memory = 4     # truncated BPTT window length
-eval_batch_size = 128     # larger is fine for eval
+eval_batch_size = 10     # larger is fine for eval
 num_workers = 4 if device == "cuda" else 0
 
 
