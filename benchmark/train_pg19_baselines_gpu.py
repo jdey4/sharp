@@ -41,9 +41,9 @@ model_type = "lstm"   # options: "rnn", "gru", "lstm"
 # ------------------------------------------------------------
 # Training speed knobs
 # ------------------------------------------------------------
-stream_batch_size = 10   # number of parallel streams within a book
+stream_batch_size = 256   # number of parallel streams within a book
 short_term_memory = 4     # truncated BPTT window length
-eval_batch_size = 10     # larger is fine for eval
+eval_batch_size = 256     # larger is fine for eval
 num_workers = 4 if device == "cuda" else 0
 
 
@@ -317,8 +317,8 @@ def evaluate_books(
         h = None
 
         for x, y in iter_stream_windows(x_streams, y_streams, short_term_memory):
-            logits, h = model(x, h)
-            h = detach_hidden(h)
+            logits, h = model(x)
+            # h = detach_hidden(h)
 
             total_bpc += compute_bpc(logits, y)
             pred_tok = logits.argmax(dim=-1)
@@ -442,7 +442,7 @@ for rep in range(1):
             optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast(device_type="cuda", enabled=use_amp):
-                logits, h = model(x, h)
+                logits, h = model(x)
                 loss = criterion(logits, y)
 
             scaler.scale(loss).backward()
