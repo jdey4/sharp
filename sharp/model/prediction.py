@@ -119,8 +119,22 @@ class PredictionConcat(nn.Module):
         z = self.in_norm(z)
 
         if self.context_size > 0 and context is not None:
-            c = self.context_proj(context)  # (B, T, input_size)
-            z = torch.cat([z, c], dim=-1)   # (B, T, 2 * input_size)
+            # Make context rank-compatible with z
+            if context.dim() == z.dim() - 1:
+                context = context.unsqueeze(1)  # (B, C) -> (B, 1, C)
+
+            c = self.context_proj(context)      # (B, T, input_size) or (B, 1, input_size)
+
+            # If needed, broadcast context across time
+            if c.size(1) != z.size(1):
+                if c.size(1) == 1:
+                    c = c.expand(-1, z.size(1), -1)
+                else:
+                    raise ValueError(
+                        f"context time dimension {c.size(1)} does not match z time dimension {z.size(1)}"
+                    )
+
+            z = torch.cat([z, c], dim=-1)
             z = self.post_concat_norm(z)
 
         for i, layer in enumerate(self.layers):
