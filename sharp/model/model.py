@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch import optim
 from collections import deque 
-from .prediction import PredictionFiLM
+from .prediction import PredictionFiLM, PredictionConcat
 from .memory import Memory
 
 
@@ -12,6 +12,7 @@ class Model(nn.Module):
 
         defaults = dict(
             total_layers = 3,
+            head_type = "concat",
             num_layers_prediction_head = 1,
             vocab_size = None,
             hidden_sizes = None,
@@ -54,14 +55,24 @@ class Model(nn.Module):
         for l in range(self.total_layers):
             output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
 
-            self.heads.append(
-                PredictionFiLM(
-                    self.hidden_sizes[l],
-                    output_size,
-                    num_layers=self.num_layers_prediction_head,
-                    context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+            if self.head_type == "concat":
+                self.heads.append(
+                    PredictionConcat(
+                        self.hidden_sizes[l],
+                        output_size,
+                        num_layers=self.num_layers_prediction_head,
+                        context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+                    )
                 )
-            )
+            else:
+                self.heads.append(
+                    PredictionFiLM(
+                        self.hidden_sizes[l],
+                        output_size,
+                        num_layers=self.num_layers_prediction_head,
+                        context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+                    )
+                )
 
             input_size = self.vocab_size if l == 0 else self.hidden_sizes[l-1]
             self.memories.append(
