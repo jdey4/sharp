@@ -342,7 +342,7 @@ class Model(nn.Module):
                     input_buffer.append(h_states[target_layer-1])
                     input = torch.cat(list(input_buffer), dim=1)
 
-                    recon_logit, _, h_ = self.memories[target_layer](add_gaussian_noise(input), h_)
+                    recon_logit, _, h_ = self.memories[target_layer](input, h_)
                     h_ = h_.detach()
 
                     recon_loss = loss_func(recon_logit, input)
