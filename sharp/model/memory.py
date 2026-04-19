@@ -129,23 +129,22 @@ class Memory(nn.Module):
 
 class MemoryMultiHeadRecall(nn.Module):
     """
-    Memory module with a standard encoder, but replacing the recurrent decoder
-    with multiple linear recall heads. Each head reconstructs one token position
-    in the input window from the final hidden state.
+    Memory module with the same encoder as the original `Memory`, but replacing
+    the recurrent decoder with a parallel multihead linear recall from the
+    final hidden state.
 
     For a window of length T, the model produces:
-        x_hat_1 = head_1(h_T)
-        x_hat_2 = head_2(h_T)
+        x_hat_1 = W_1 h_T + b_1
+        x_hat_2 = W_2 h_T + b_2
         ...
-        x_hat_T = head_T(h_T)
+        x_hat_T = W_T h_T + b_T
 
-    This explicitly pressures the final hidden state to preserve the whole
-    window in a position-addressable form.
+    where all heads are applied in parallel using einsum.
 
     Args:
         input_size (int): Vocabulary size for layer 0, or feature dimension for higher layers.
         hidden_size (int): Encoder hidden size.
-        embedding_dim (int): Embedding size for input tokens / vectors.
+        embedding_dim (int): Embedding size for token / vector inputs.
         window_size (int): Number of tokens in each training window.
         layer (int): 0 for token input, >0 for vector input.
         bad_init (bool): If True and layer != 0, initializes encoder as weak LSM-style ablation.
@@ -160,6 +159,7 @@ class MemoryMultiHeadRecall(nn.Module):
         window_size=4,
         layer=0,
         bad_init=False,
+        use_head_norm=True,
     ):
         super().__init__()
         self.layer = layer
@@ -173,19 +173,33 @@ class MemoryMultiHeadRecall(nn.Module):
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(
-                embedding_dim, hidden_size, batch_first=True, nonlinearity="tanh"
+                embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh'
             )
         else:
             assert embedding_dim is not None, f"embedding_dim required for layer {layer}"
             self.embedding = nn.Linear(input_size, embedding_dim)
             self.encoder = nn.RNN(
-                embedding_dim, hidden_size, batch_first=True, nonlinearity="tanh"
+                embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh'
             )
 
-        # One linear recall head per position in the window
-        self.recall_heads = nn.ModuleList([
-            nn.Linear(hidden_size, input_size) for _ in range(window_size)
-        ])
+        self.head_norm = nn.LayerNorm(hidden_size) if use_head_norm else nn.Identity()
+
+        # --------------------------------------------------
+        # Parallel multihead linear recall
+        # --------------------------------------------------
+        # One linear head per position:
+        #   head_weight[pos]: (input_size, hidden_size)
+        #   head_bias[pos]:   (input_size,)
+        #
+        # Applied as:
+        #   logits[b, t, v] = sum_h h_final[b, h] * head_weight[t, v, h] + head_bias[t, v]
+        #
+        self.head_weight = nn.Parameter(
+            torch.empty(window_size, input_size, hidden_size)
+        )
+        self.head_bias = nn.Parameter(
+            torch.zeros(window_size, input_size)
+        )
 
         # --------------------------------------------------
         # Initialization
@@ -195,9 +209,7 @@ class MemoryMultiHeadRecall(nn.Module):
         else:
             self._init_default_rnn(self.encoder)
 
-        for head in self.recall_heads:
-            nn.init.xavier_uniform_(head.weight)
-            nn.init.zeros_(head.bias)
+        nn.init.xavier_uniform_(self.head_weight)
 
         if isinstance(self.embedding, nn.Linear):
             nn.init.xavier_uniform_(self.embedding.weight)
@@ -205,6 +217,9 @@ class MemoryMultiHeadRecall(nn.Module):
                 nn.init.zeros_(self.embedding.bias)
 
     def _init_default_rnn(self, rnn):
+        """
+        Reasonable default initialization.
+        """
         for name, param in rnn.named_parameters():
             if "weight_ih" in name:
                 nn.init.xavier_uniform_(param)
@@ -214,6 +229,9 @@ class MemoryMultiHeadRecall(nn.Module):
                 nn.init.zeros_(param)
 
     def _init_ablation_lsm(self, rnn):
+        """
+        Initialize everything to 1 (no randomness, no scaling).
+        """
         with torch.no_grad():
             for name, param in rnn.named_parameters():
                 if "weight_ih" in name:
@@ -236,22 +254,31 @@ class MemoryMultiHeadRecall(nn.Module):
                 f"Input window length {T} does not match configured window_size {self.window_size}"
             )
 
-        # (B, T, E)
+        # --------------------------------------------------
+        # Encode
+        # --------------------------------------------------
+        # x_emb: (B, T, E)
         x_emb = self.embedding(x)
 
         # enc_out: (B, T, H)
         # h_last:  (1, B, H)
         enc_out, h_last = self.encoder(x_emb, h)
 
-        # final hidden state for whole-window recall
-        h_final = h_last[-1]              # (B, H)
-
-        # pass state for stride-1 sliding windows
+        # For stride-1 sliding windows, carry the state aligned to the next window.
         h_pass = enc_out[:, 0, :].unsqueeze(0)
 
-        # reconstruct all positions from the same final hidden state
-        logits_per_pos = [head(h_final) for head in self.recall_heads]   # list of (B, input_size)
-        logits = torch.stack(logits_per_pos, dim=1)                      # (B, T, input_size)
+        # Final hidden state for full-window recall
+        h_final = h_last[-1]              # (B, H)
+        h_final = self.head_norm(h_final) # (B, H)
+
+        # --------------------------------------------------
+        # Parallel multihead recall
+        # --------------------------------------------------
+        # head_weight: (T, V, H)
+        # h_final:     (B, H)
+        # logits:      (B, T, V)
+        logits = torch.einsum('bh,tvh->btv', h_final, self.head_weight)
+        logits = logits + self.head_bias.unsqueeze(0)
 
         return logits, h_last, h_pass
 
