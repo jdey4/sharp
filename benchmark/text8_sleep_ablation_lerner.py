@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 # ============================================================
 # Device
 # ============================================================
-device = "cpu"   # parallel only recommended on CPU
+device = "mps"   # parallel only recommended on CPU
 print("Using device:", device)
 
 # ============================================================
@@ -72,6 +72,7 @@ class SequenceDataset(Dataset):
 def build_model(device, use_sleep=False):
     model = Model(
         total_layers=2,
+        head_type = "film",
         num_layers_prediction_head=2,
         vocab_size=27,
         hidden_sizes=[512, 512],
@@ -137,7 +138,7 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 short_term_memory = 4
 train_tokens = 99_000_000
 eval_tokens = 300_000
-eval_every = 300_000
+eval_every = 100_000
 sleep_every = 20_000
 sleep_total_steps = 17
 

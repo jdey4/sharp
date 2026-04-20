@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import optim
 from collections import deque 
 from .prediction import PredictionFiLM, PredictionConcat
-from .memory import Memory
+from .memory import Memory, MemoryMultiHeadRecall
 
 
 class Model(nn.Module):
@@ -13,6 +13,7 @@ class Model(nn.Module):
         defaults = dict(
             total_layers = 3,
             head_type = "concat",
+            memory_type = "multihead",
             num_layers_prediction_head = 1,
             vocab_size = None,
             hidden_sizes = None,
@@ -75,15 +76,28 @@ class Model(nn.Module):
                 )
 
             input_size = self.vocab_size if l == 0 else self.hidden_sizes[l-1]
-            self.memories.append(
-                Memory(
-                    input_size=input_size,
-                    hidden_size=self.hidden_sizes[l],
-                    embedding_dim=self.embedding_dim,
-                    layer=l,
-                    bad_init=self.bad_init
+
+            if self.memory_type == 'multihead':
+                self.memories.append(
+                    MemoryMultiHeadRecall(
+                        input_size=input_size,
+                        hidden_size=self.hidden_sizes[l],
+                        embedding_dim=self.embedding_dim,
+                        window_size=self.short_term_memory,
+                        layer=l,
+                        bad_init=self.bad_init
+                    )
                 )
-            )
+            else:
+                self.memories.append(
+                    Memory(
+                        input_size=input_size,
+                        hidden_size=self.hidden_sizes[l],
+                        embedding_dim=self.embedding_dim,
+                        layer=l,
+                        bad_init=self.bad_init
+                    )
+                )
 
         # ------------------------------------------------------------
         # 2. Define optmizers and loss function 
