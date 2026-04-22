@@ -159,7 +159,6 @@ class MemoryMultiHeadRecall(nn.Module):
         window_size=4,
         layer=0,
         bad_init=False,
-        use_head_norm=True,
     ):
         super().__init__()
         self.layer = layer
@@ -181,8 +180,6 @@ class MemoryMultiHeadRecall(nn.Module):
             self.encoder = nn.RNN(
                 embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh'
             )
-
-        self.head_norm = nn.LayerNorm(hidden_size) if use_head_norm else nn.Identity()
 
         # --------------------------------------------------
         # Parallel multihead linear recall
@@ -269,8 +266,7 @@ class MemoryMultiHeadRecall(nn.Module):
 
         # Final hidden state for full-window recall
         h_final = h_last[-1]              # (B, H)
-        h_final = self.head_norm(h_final) # (B, H)
-
+        
         # --------------------------------------------------
         # Parallel multihead recall
         # --------------------------------------------------

@@ -13,6 +13,7 @@ import pickle
 # Hugging Face datasets
 # pip install datasets
 from datasets import load_dataset
+from sharp.utils import compute_bpc
 
 #%%
 device = "cpu"  # change to "cuda" if running on GPU server
@@ -21,7 +22,7 @@ print("Using device:", device)
 # ------------------------------------------------------------
 # Choose baseline type here
 # ------------------------------------------------------------
-model_type = "gru"   # options: "rnn", "gru", "lstm"
+model_type = "lstm"   # options: "rnn", "gru", "lstm"
 
 #%%
 # ============================================================
@@ -359,6 +360,7 @@ num_layers = 5
 lr = 1e-4
 weight_decay = 1e-12
 
+#%%
 model = CharRNNBaseline(
     vocab_size=vocab_size,
     embedding_dim=embedding_dim,
@@ -475,6 +477,22 @@ torch.save(
 #   - Backward BPC: first few training books
 #   - Current BPC: last few training books
 # ============================================================
+
+model = CharRNNBaseline(
+    vocab_size=vocab_size,
+    embedding_dim=embedding_dim,
+    hidden_size=hidden_size,
+    num_layers=num_layers,
+    model_type=model_type,
+    device=device,
+).to(device)
+
+# 3) load weights
+ckpt_path = f"/Users/jd/sharp/saved_models/pg19_models/{model_type}_model{model_no}_pg19_100M_cap2M_memlite.pt"
+state_dict = torch.load(ckpt_path, map_location=device)
+model.load_state_dict(state_dict)
+model.eval()
+
 
 num_backward_books = min(5, len(train_books_encoded))
 num_current_books = min(5, len(train_books_encoded))

@@ -12,7 +12,7 @@ class Model(nn.Module):
 
         defaults = dict(
             total_layers = 3,
-            head_type = "concat",
+            head_type = "film",
             memory_type = "multihead",
             num_layers_prediction_head = 1,
             vocab_size = None,
