@@ -16,7 +16,7 @@ from joblib import Parallel, delayed
 # ============================================================
 # Device
 # ============================================================
-device = "mps"   # parallel only recommended on CPU
+device = "cpu"   # parallel only recommended on CPU
 print("Using device:", device)
 
 # ============================================================
