@@ -129,26 +129,27 @@ class Memory(nn.Module):
 
 class MemoryMultiHeadRecall(nn.Module):
     """
-    Memory module with the same encoder as the original `Memory`, but replacing
-    the recurrent decoder with a parallel multihead linear recall from the
-    final hidden state.
+    Memory module with an RNN encoder and segmented multihead recall.
 
-    For a window of length T, the model produces:
-        x_hat_1 = W_1 h_T + b_1
-        x_hat_2 = W_2 h_T + b_2
+    The final hidden state h_T is divided into `window_size` equal segments.
+    Each segment is assigned to one output head, and each head reconstructs
+    the corresponding lag independently.
+
+    For window length T:
+        h_T = [h^(1), h^(2), ..., h^(T)]
+
+        x_hat_1 = W_1 h^(1) + b_1
+        x_hat_2 = W_2 h^(2) + b_2
         ...
-        x_hat_T = W_T h_T + b_T
-
-    where all heads are applied in parallel using einsum.
+        x_hat_T = W_T h^(T) + b_T
 
     Args:
         input_size (int): Vocabulary size for layer 0, or feature dimension for higher layers.
-        hidden_size (int): Encoder hidden size.
+        hidden_size (int): Encoder hidden size. Must be divisible by window_size.
         embedding_dim (int): Embedding size for token / vector inputs.
         window_size (int): Number of tokens in each training window.
         layer (int): 0 for token input, >0 for vector input.
         bad_init (bool): If True and layer != 0, initializes encoder as weak LSM-style ablation.
-        use_head_norm (bool): Whether to normalize final hidden state before recall.
     """
 
     def __init__(
@@ -161,10 +162,17 @@ class MemoryMultiHeadRecall(nn.Module):
         bad_init=False,
     ):
         super().__init__()
+
+        if hidden_size % window_size != 0:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) must be divisible by window_size ({window_size})"
+            )
+
         self.layer = layer
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.window_size = window_size
+        self.segment_size = hidden_size // window_size
         self.decoder_is_frozen = False
         self.bad_init = bad_init
 
@@ -172,35 +180,25 @@ class MemoryMultiHeadRecall(nn.Module):
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(
-                embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh'
+                embedding_dim, hidden_size, batch_first=True, nonlinearity="tanh"
             )
         else:
             assert embedding_dim is not None, f"embedding_dim required for layer {layer}"
             self.embedding = nn.Linear(input_size, embedding_dim)
             self.encoder = nn.RNN(
-                embedding_dim, hidden_size, batch_first=True, nonlinearity='tanh'
+                embedding_dim, hidden_size, batch_first=True, nonlinearity="tanh"
             )
 
-        # --------------------------------------------------
-        # Parallel multihead linear recall
-        # --------------------------------------------------
-        # One linear head per position:
-        #   head_weight[pos]: (input_size, hidden_size)
-        #   head_bias[pos]:   (input_size,)
-        #
-        # Applied as:
-        #   logits[b, t, v] = sum_h h_final[b, h] * head_weight[t, v, h] + head_bias[t, v]
-        #
+        # One head per lag, but each head only reads its own segment
+        # head_weight[t]: (input_size, segment_size)
+        # head_bias[t]:   (input_size,)
         self.head_weight = nn.Parameter(
-            torch.empty(window_size, input_size, hidden_size)
+            torch.empty(window_size, input_size, self.segment_size)
         )
         self.head_bias = nn.Parameter(
             torch.zeros(window_size, input_size)
         )
 
-        # --------------------------------------------------
-        # Initialization
-        # --------------------------------------------------
         if self.bad_init and self.layer != 0:
             self._init_ablation_lsm(self.encoder)
         else:
@@ -214,9 +212,6 @@ class MemoryMultiHeadRecall(nn.Module):
                 nn.init.zeros_(self.embedding.bias)
 
     def _init_default_rnn(self, rnn):
-        """
-        Reasonable default initialization.
-        """
         for name, param in rnn.named_parameters():
             if "weight_ih" in name:
                 nn.init.xavier_uniform_(param)
@@ -226,9 +221,6 @@ class MemoryMultiHeadRecall(nn.Module):
                 nn.init.zeros_(param)
 
     def _init_ablation_lsm(self, rnn):
-        """
-        Initialize everything to 1 (no randomness, no scaling).
-        """
         with torch.no_grad():
             for name, param in rnn.named_parameters():
                 if "weight_ih" in name:
@@ -251,29 +243,25 @@ class MemoryMultiHeadRecall(nn.Module):
                 f"Input window length {T} does not match configured window_size {self.window_size}"
             )
 
-        # --------------------------------------------------
         # Encode
-        # --------------------------------------------------
-        # x_emb: (B, T, E)
         x_emb = self.embedding(x)
-
-        # enc_out: (B, T, H)
-        # h_last:  (1, B, H)
         enc_out, h_last = self.encoder(x_emb, h)
 
-        # For stride-1 sliding windows, carry the state aligned to the next window.
+        # Keep your existing state-passing behavior
         h_pass = enc_out[:, 0, :].unsqueeze(0)
 
-        # Final hidden state for full-window recall
-        h_final = h_last[-1]              # (B, H)
-        
-        # --------------------------------------------------
-        # Parallel multihead recall
-        # --------------------------------------------------
-        # head_weight: (T, V, H)
-        # h_final:     (B, H)
+        # Final hidden state
+        h_final = h_last[-1]  # (B, H)
+
+        # Divide hidden state into T equal segments
+        # (B, H) -> (B, T, H_seg)
+        h_segments = h_final.view(B, self.window_size, self.segment_size)
+
+        # Each head sees only its own segment
+        # h_segments:  (B, T, H_seg)
+        # head_weight: (T, V, H_seg)
         # logits:      (B, T, V)
-        logits = torch.einsum('bh,tvh->btv', h_final, self.head_weight)
+        logits = torch.einsum("bth,tvh->btv", h_segments, self.head_weight)
         logits = logits + self.head_bias.unsqueeze(0)
 
         return logits, h_last, h_pass
