@@ -71,19 +71,20 @@ class SequenceDataset(Dataset):
 # ============================================================
 def build_model(device, use_sleep=False):
     model = Model(
-        total_layers=2,
+        total_layers=5,
         head_type = "film",
         num_layers_prediction_head=2,
         vocab_size=27,
-        hidden_sizes=[512, 512],
-        embedding_dim=100,
+        hidden_sizes=[128, 128, 128, 128, 128],
+        embedding_dim=30,
         lr_layers=1e-4,
+        lr_slowdown_factor = 0.25,
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
         short_term_memory=4,
-        context_tag_buffer_size=1000,
+        context_tag_buffer_size=20,
         recon_threshold=1e-2,
-        bad_init=True, 
+        bad_init=False, 
         device=device,
     )
     return model
@@ -140,7 +141,7 @@ train_tokens = 99_000_000
 eval_tokens = 300_000
 eval_every = 100_000
 sleep_every = 20_000
-sleep_total_steps = 17
+sleep_total_steps = 1025
 
 save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_300k_parallel.pickle"
 partial_dir = "../pickle_files/text8_sleep_ablation_partial"
@@ -274,9 +275,9 @@ def run_condition(use_sleep, worker_id):
 
 
 if __name__ == "__main__":
-    all_results = Parallel(n_jobs=2, backend="loky", verbose=10)(
+    all_results = Parallel(n_jobs=-2, backend="loky", verbose=10)(
         delayed(run_condition)(use_sleep, worker_id=i)
-        for i, use_sleep in enumerate([False, True])
+        for i, use_sleep in enumerate([True])
     )
 
     flat_results = [row for worker_rows in all_results for row in worker_rows]

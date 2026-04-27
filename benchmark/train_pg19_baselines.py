@@ -22,7 +22,7 @@ print("Using device:", device)
 # ------------------------------------------------------------
 # Choose baseline type here
 # ------------------------------------------------------------
-model_type = "lstm"   # options: "rnn", "gru", "lstm"
+model_type = "gru"   # options: "rnn", "gru", "lstm"
 
 #%%
 # ============================================================
