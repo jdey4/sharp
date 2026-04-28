@@ -84,7 +84,7 @@ def build_model(device, use_sleep=False):
         short_term_memory=4,
         context_tag_buffer_size=20,
         recon_threshold=1e-2,
-        bad_init=False, 
+        bad_init=True, 
         device=device,
     )
     return model

@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 class Memory(nn.Module):
 
-    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, bad_init=False):
+    def __init__(self, input_size, hidden_size, embedding_dim=None, layer=0, bad_init=False, pretrained_embedding=False):
         super().__init__()
         self.layer = layer
         self.input_size = input_size
@@ -14,7 +14,7 @@ class Memory(nn.Module):
         self.decoder_is_frozen = False
         self.bad_init = bad_init
 
-        if layer == 0:
+        if layer == 0 and pretrained_embedding is False:
             assert embedding_dim is not None, "embedding_dim required for layer 0"
             self.embedding = nn.Embedding(input_size, embedding_dim)
             self.encoder = nn.RNN(

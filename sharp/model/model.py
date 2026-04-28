@@ -27,6 +27,7 @@ class Model(nn.Module):
             context_tag_buffer_size=10,
             accelerate=None,
             bad_init=False,
+            pretrained_embedding=False,
             device = "cpu",
         )
         for k, v in {**defaults, **kwargs}.items():
@@ -85,7 +86,8 @@ class Model(nn.Module):
                         embedding_dim=self.embedding_dim,
                         window_size=self.short_term_memory,
                         layer=l,
-                        bad_init=self.bad_init
+                        bad_init=self.bad_init,
+                        pretrained_embedding=self.pretrained_embedding
                     )
                 )
             else:
