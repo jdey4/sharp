@@ -15,6 +15,7 @@ class Model(nn.Module):
             head_type = "film",
             memory_type = "multihead",
             num_layers_prediction_head = 1,
+            input_size = None,
             vocab_size = None,
             hidden_sizes = None,
             embedding_dim = None,
@@ -76,7 +77,13 @@ class Model(nn.Module):
                     )
                 )
 
-            input_size = self.vocab_size if l == 0 else self.hidden_sizes[l-1]
+            if l == 0 and self.pretrained_embedding is False:
+                input_size = self.vocab_size
+            elif l == 0 and self.pretrained_embedding is True:
+                input_size = self.input_size
+            else:
+                input_size = self.hidden_sizes[l-1]
+             
 
             if self.memory_type == 'multihead':
                 self.memories.append(
