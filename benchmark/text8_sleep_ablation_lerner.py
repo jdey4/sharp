@@ -73,7 +73,7 @@ def build_model(device, use_sleep=False):
     model = Model(
         total_layers=5,
         head_type = "film",
-        num_layers_prediction_head=2,
+        num_layers_prediction_head=4,
         vocab_size=27,
         hidden_sizes=[128, 128, 128, 128, 128],
         embedding_dim=30,
@@ -143,9 +143,9 @@ eval_every = 100_000
 sleep_every = 20_000
 sleep_total_steps = 1025
 
-save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_300k_parallel.pickle"
-partial_dir = "../pickle_files/text8_sleep_ablation_partial"
-model_dir = "../saved_models/text8_sleep_ablation_parallel"
+save_path = "../pickle_files/text8_sleep4_ablation_5M_eval_every_300k_parallel_sleepless.pickle"
+partial_dir = "../pickle_files/text8_sleep_ablation_partial4_sleepless"
+model_dir = "../saved_models/text8_sleep_ablation_parallel4_sleepless"
 
 os.makedirs(partial_dir, exist_ok=True)
 os.makedirs(model_dir, exist_ok=True)
@@ -277,7 +277,7 @@ def run_condition(use_sleep, worker_id):
 if __name__ == "__main__":
     all_results = Parallel(n_jobs=-2, backend="loky", verbose=10)(
         delayed(run_condition)(use_sleep, worker_id=i)
-        for i, use_sleep in enumerate([True])
+        for i, use_sleep in enumerate([False])
     )
 
     flat_results = [row for worker_rows in all_results for row in worker_rows]
