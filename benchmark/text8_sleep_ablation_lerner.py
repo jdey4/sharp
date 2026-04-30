@@ -73,7 +73,7 @@ def build_model(device, use_sleep=False):
     model = Model(
         total_layers=5,
         head_type = "film",
-        num_layers_prediction_head=4,
+        num_layers_prediction_head=2,
         vocab_size=27,
         hidden_sizes=[128, 128, 128, 128, 128],
         embedding_dim=30,
@@ -143,9 +143,9 @@ eval_every = 100_000
 sleep_every = 20_000
 sleep_total_steps = 1025
 
-save_path = "../pickle_files/text8_sleep4_ablation_5M_eval_every_300k_parallel_sleepless.pickle"
-partial_dir = "../pickle_files/text8_sleep_ablation_partial4_sleepless"
-model_dir = "../saved_models/text8_sleep_ablation_parallel4_sleepless"
+save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_300k_parallel_sleepless.pickle"
+partial_dir = "../pickle_files/text8_sleep_ablation_partial_sleepless_again"
+model_dir = "../saved_models/text8_sleep_ablation_parallel_sleepless_again"
 
 os.makedirs(partial_dir, exist_ok=True)
 os.makedirs(model_dir, exist_ok=True)
@@ -290,3 +290,69 @@ if __name__ == "__main__":
     print("\nSaved results to:", save_path, flush=True)
     print(df.head(), flush=True)
     print(df.tail(), flush=True)
+
+#%%
+'''import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+sns.set_context('talk')
+# ==============================
+# Paths
+# ==============================
+sleep_path = "../pickle_files/text8_sleep_ablation_partial/sleep_partial.pkl"
+nosleep_path = "../pickle_files/text8_sleep_ablation_partial_sleepless/no_sleep_partial.pkl"
+
+# ==============================
+# Load + sort
+# ==============================
+df_sleep = pd.read_pickle(sleep_path).sort_values("samples seen")
+df_nosleep = pd.read_pickle(nosleep_path).sort_values("samples seen")
+
+# ==============================
+# Moving average (clean smoothing)
+# ==============================
+def moving_avg(x, w=7):
+    return np.convolve(x, np.ones(w)/w, mode='valid')
+
+window = 20
+
+def smooth_curve(df, key):
+    x = df["samples seen"].values
+    y = df[key].values
+    y_s = moving_avg(y, window)
+    x_s = x[window-1:]
+    return x_s, y_s
+
+# choose metric
+metric = "eval_bpc"   # or "train_bpc_window"
+
+x_s, y_s = smooth_curve(df_sleep, metric)
+x_n, y_n = smooth_curve(df_nosleep, metric)
+
+# ==============================
+# Plot
+# ==============================
+plt.figure(figsize=(7, 5))
+
+plt.plot(x_s, y_s, linewidth=2.5, c='r', label="Sleep")
+plt.plot(x_n, y_n, linewidth=2.5, c='b', label="No Sleep")
+
+plt.xlabel("Samples Seen", fontsize=20)
+plt.ylabel("Bits per Token (BPC)", fontsize=20)
+
+plt.title("Sleep vs No Sleep (Text8)", fontsize=22)
+
+plt.legend(frameon=False)
+
+# remove top/right borders (clean look)
+ax = plt.gca()
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+
+plt.tight_layout()
+plt.show()
+
+plt.savefig("../plots/text8_sleep_ablation.pdf")'''
+# %%
