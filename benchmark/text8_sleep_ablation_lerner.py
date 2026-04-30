@@ -292,7 +292,7 @@ if __name__ == "__main__":
     print(df.tail(), flush=True)
 
 #%%
-'''import pandas as pd
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -352,7 +352,6 @@ ax.spines['top'].set_visible(False)
 ax.spines['right'].set_visible(False)
 
 plt.tight_layout()
-plt.show()
 
-plt.savefig("../plots/text8_sleep_ablation.pdf")'''
+plt.savefig("../plots/text8_sleep_ablation.pdf")
 # %%
