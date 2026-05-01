@@ -286,7 +286,7 @@ print("First 5 train book lengths:", [len(x) for x in train_books_encoded[:5]])
 model_no = 1
 
 total_layers = 5
-head_layers = 2
+head_layers = 4
 short_term_memory = 4
 vocab_size = 27
 
@@ -301,6 +301,7 @@ model = Model(
 
     # ---- Learning rates per layer ----
     lr_layers=1e-4,
+    lr_slowdown_factor = 0.25,
 
     # ---- Optimizer type ----
     optimizer_class=torch.optim.Adam,
@@ -423,7 +424,7 @@ for rep in range(1):
 os.makedirs("../saved_models/pg19_models", exist_ok=True)
 torch.save(
     model.state_dict(),
-    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite_head4_lr_decay_025.pt"
 )
 
 #%%
@@ -489,7 +490,7 @@ summary = {
 }
 
 os.makedirs("../pickle_files", exist_ok=True)
-with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite_head4_lr_decay_025.pickle", "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")
