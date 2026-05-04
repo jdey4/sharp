@@ -292,7 +292,7 @@ if __name__ == "__main__":
     print(df.tail(), flush=True)
 
 #%%
-'''import pandas as pd
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -302,7 +302,7 @@ sns.set_context('talk')
 # Paths
 # ==============================
 sleep_path = "../pickle_files/text8_sleep_ablation_partial/sleep_partial.pkl"
-nosleep_path = "../pickle_files/text8_sleep_ablation_partial_sleepless/no_sleep_partial.pkl"
+nosleep_path = "../pickle_files/text8_sleep_ablation_partial_sleepless_again/no_sleep_partial.pkl"
 
 # ==============================
 # Load + sort
@@ -353,5 +353,5 @@ ax.spines['right'].set_visible(False)
 
 plt.tight_layout()
 
-plt.savefig("../plots/text8_sleep_ablation.pdf")'''
+plt.savefig("../plots/text8_sleep_ablation.pdf")
 # %%
