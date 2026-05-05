@@ -67,7 +67,7 @@ def tokenize_gpt2(text):
 
 
 def load_pg19_books_by_gpt2_token_budget(
-    target_train_tokens=100_000_000,
+    target_train_tokens=25_000_000,
     max_train_tokens_per_book=None,
     max_holdout_books=5,
     min_book_tokens=1024,
@@ -136,8 +136,7 @@ def load_pg19_books_by_gpt2_token_budget(
 
 
 # ============================================================
-# Dataset: returns token IDs only
-# Dense X is created in the loop.
+# Dataset
 # ============================================================
 
 class PG19GPT2Dataset(Dataset):
@@ -174,7 +173,7 @@ def sample_topk(logits, k=50, temperature=1.0):
 
 
 # ============================================================
-# Dense-input SHARP steps
+# Dense-input SHARP wake step
 # X dense, Y token IDs
 # ============================================================
 
@@ -222,10 +221,9 @@ def wake_step_denseX_tokenY(model, x_dense, y_token, h_=None, return_context=Fal
 
     # --------------------------------------------------------
     # Bottom-up state updates
-    # Keep RNN hidden states 3-D during encode_step_from_vec:
-    # h_prev: [1, B, H]
-    # x_step: [B, 1, D]
     # Stored model.h_states[l]: [B, H]
+    # RNN hidden h_prev: [1, B, H]
+    # RNN input x_step: [B, 1, D]
     # --------------------------------------------------------
     with torch.no_grad():
         for l in range(model.total_layers):
@@ -245,6 +243,7 @@ def wake_step_denseX_tokenY(model, x_dense, y_token, h_=None, return_context=Fal
                     x_step,
                     h_prev,
                 )
+
                 model.h_states[l] = h_next.squeeze(0)     # [B, H]
 
             else:
@@ -255,10 +254,11 @@ def wake_step_denseX_tokenY(model, x_dense, y_token, h_=None, return_context=Fal
                     x_step,
                     h_prev,
                 )
+
                 model.h_states[l] = h_next.squeeze(0)         # [B, H]
 
     # --------------------------------------------------------
-    # Top-down context construction through pattern blocks
+    # Top-down prediction
     # --------------------------------------------------------
     context = None
 
@@ -277,9 +277,6 @@ def wake_step_denseX_tokenY(model, x_dense, y_token, h_=None, return_context=Fal
 
     logits = logits.squeeze(1)  # [B, vocab]
 
-    # --------------------------------------------------------
-    # Prediction loss: full softmax CE over GPT-2 token IDs
-    # --------------------------------------------------------
     pred_loss = nn.functional.cross_entropy(logits, y_token)
 
     for opt in model.head_wake_opts:
@@ -301,19 +298,38 @@ def wake_step_denseX_tokenY(model, x_dense, y_token, h_=None, return_context=Fal
 
     return logits.detach(), pred_loss.item(), recon_loss.item(), h_.detach()
 
+
+# ============================================================
+# Dense-input SHARP eval step -- FIXED
+# ============================================================
+
 @torch.no_grad()
 def eval_step_denseX_tokenY(model, x_dense, y_token, h_=None):
+    """
+    Fixed eval step for dense GPT-2 inputs.
+
+    x_dense: [B, T, 768]
+    y_token: [B]
+    """
+
     model.eval()
 
     x_dense = x_dense.to(model.device)
     y_token = y_token.view(-1).long().to(model.device)
 
+    # Layer-0 dense reconstruction
     recon_out, h0, h_pass = model.memories[0](x_dense, h_)
     recon_loss = nn.functional.mse_loss(recon_out, x_dense)
 
     model.step += 1
     t = model.step
 
+    # --------------------------------------------------------
+    # Bottom-up state updates with correct RNN hidden shape
+    # Stored model.h_states[l]: [B, H]
+    # RNN hidden h_prev: [1, B, H]
+    # RNN input x_step: [B, 1, D]
+    # --------------------------------------------------------
     for l in range(model.total_layers):
         if model.accelerate is None:
             stride = model.short_term_memory ** l
@@ -324,28 +340,47 @@ def eval_step_denseX_tokenY(model, x_dense, y_token, h_=None):
             continue
 
         if l == 0:
-            model.h_states[l] = model.memories[l].encode_step_from_vec(
-                x_dense[:, -1:, :],
-                model.h_states[l],
-            )
-        else:
-            model.h_states[l] = model.memories[l].encode_step_from_vec(
-                model.h_states[l - 1],
-                model.h_states[l],
+            h_prev = model.h_states[l].unsqueeze(0)   # [1, B, H]
+            x_step = x_dense[:, -1:, :]               # [B, 1, 768]
+
+            h_next = model.memories[l].encode_step_from_vec(
+                x_step,
+                h_prev,
             )
 
+            model.h_states[l] = h_next.squeeze(0)     # [B, H]
+
+        else:
+            h_prev = model.h_states[l].unsqueeze(0)       # [1, B, H]
+            x_step = model.h_states[l - 1].unsqueeze(1)   # [B, 1, H_lower]
+
+            h_next = model.memories[l].encode_step_from_vec(
+                x_step,
+                h_prev,
+            )
+
+            model.h_states[l] = h_next.squeeze(0)         # [B, H]
+
+    # --------------------------------------------------------
+    # Top-down prediction
+    # --------------------------------------------------------
     context = None
+
     for l in reversed(range(model.total_layers)):
         if l == 0:
             logits = model.heads[0](model.h_states[0], context=context)
         else:
             context = model.heads[l](model.h_states[l], context=context)
 
-    logits = logits.squeeze(1)
+    logits = logits.squeeze(1)  # [B, vocab]
     pred_loss = nn.functional.cross_entropy(logits, y_token)
 
     return logits, pred_loss.item(), recon_loss.item(), h_pass
 
+
+# ============================================================
+# Dense sleep helpers
+# ============================================================
 
 @torch.no_grad()
 def teacher_step_layer0_dense(model, h0_carry, context=None, topk=50):
@@ -377,11 +412,6 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
     - token IDs -> GPT-2 dense embeddings
     - layer 0 advances using dense vectors
     - upper memories reconstruct lower hidden-state windows with MSE
-
-    Convention:
-        model.h_states[l] / h_states[l] stored as [B, H]
-        RNN input windows are [B, T, H]
-        RNN hidden states are [1, B, H]
     """
 
     if model.wake is True:
@@ -421,7 +451,6 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
         for jj in range(len(model.context_tags)):
             h_states = {}
 
-            # context_tags stores h0 as [B, H]
             h0 = model.context_tags[jj][0]
             if h0.dim() == 3:
                 h0 = h0.squeeze(1)
@@ -439,11 +468,11 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
                 # ------------------------------------------------
                 h_states[0], _ = teacher_step_layer0_dense(
                     model,
-                    h_states[0],  # [B, H]
+                    h_states[0],
                     context=model.context_tags[jj][1],
                     topk=topk,
                 )
-                # teacher returns [B, H]
+
                 if h_states[0].dim() == 3:
                     h_states[0] = h_states[0].squeeze(0)
 
@@ -461,9 +490,8 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
 
                     lower = h_states[layer - 1]
 
-                    # lower must be [B, 1, H_lower]
                     if lower.dim() == 2:
-                        lower_in = lower.unsqueeze(1)
+                        lower_in = lower.unsqueeze(1)  # [B, 1, H_lower]
                     elif lower.dim() == 3:
                         lower_in = lower
                     else:
@@ -474,9 +502,8 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
                     if prev is None:
                         h_prev = None
                     else:
-                        # prev stored [B, H], RNN hidden needs [1, B, H]
                         if prev.dim() == 2:
-                            h_prev = prev.unsqueeze(0)
+                            h_prev = prev.unsqueeze(0)  # [1, B, H]
                         elif prev.dim() == 3:
                             h_prev = prev
                         else:
@@ -487,8 +514,7 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
                         h_prev,
                     )
 
-                    # store as [B, H]
-                    h_states[layer] = h_next.squeeze(0)
+                    h_states[layer] = h_next.squeeze(0)  # [B, H]
 
                 # ------------------------------------------------
                 # Train target layer on windows of lower-layer states
@@ -498,9 +524,8 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
 
                 lower_state = h_states[target_layer - 1]
 
-                # FORCE lower_state to [B, 1, H_lower]
                 if lower_state.dim() == 2:
-                    lower_state_3d = lower_state.unsqueeze(1)
+                    lower_state_3d = lower_state.unsqueeze(1)  # [B, 1, H_lower]
                 elif lower_state.dim() == 3:
                     lower_state_3d = lower_state
                 else:
@@ -531,8 +556,9 @@ def sleep_step_dense(model, total_steps=100, verbose=False, topk=50):
 
     model.context_tags.clear()
 
+
 # ============================================================
-# Evaluation
+# Evaluation helpers
 # ============================================================
 
 def reset_eval_state(model):
@@ -548,14 +574,14 @@ def reset_eval_state(model):
 
 
 @torch.no_grad()
-def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_book=None):
+def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_book=None, name="eval"):
     total_bits = 0.0
     total_correct = 0
     total_count = 0
 
     model.eval()
 
-    for encoded_book in books_encoded:
+    for book_idx, encoded_book in enumerate(books_encoded):
         if max_tokens_per_book is not None:
             encoded_book = encoded_book[:max_tokens_per_book]
 
@@ -575,10 +601,15 @@ def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_boo
         reset_eval_state(model)
         h_ = None
 
-        for x_ids, y_token in loader:
+        for x_ids, y_token in tqdm(
+            loader,
+            desc=f"Evaluating {name} book {book_idx + 1}/{len(books_encoded)}",
+            leave=False,
+        ):
             y_token = y_token.to(model.device)
 
-            x_dense = ids_to_gpt2_embeddings(x_ids).to(model.device)
+            with torch.no_grad():
+                x_dense = ids_to_gpt2_embeddings(x_ids).to(model.device)
 
             logits, pred_loss, recon_loss, h_ = eval_step_denseX_tokenY(
                 model,
@@ -647,7 +678,7 @@ print("First 5 train book lengths:", [len(x) for x in train_books_encoded[:5]])
 
 
 # ============================================================
-# Build model
+# Build SHARP model
 # ============================================================
 
 model = Model(
@@ -659,8 +690,7 @@ model = Model(
     # Prediction output vocabulary
     vocab_size=GPT2_VOCAB_SIZE,
 
-    # Important: source model must support dense layer-0 input.
-    # This says layer-0 memory input is 768-d GPT-2 embedding.
+    # Layer-0 dense GPT-2 input
     input_size=GPT2_EMBED_DIM,
 
     hidden_sizes=[hidden_size] * total_layers,
@@ -680,98 +710,103 @@ model = Model(
 
 model.summary()
 
-print("\nTraining SHARP on PG-19")
-print("X: dense GPT-2 embedding windows")
-print("Y: next GPT-2 token ID")
-print("Output: full softmax over GPT-2 vocabulary")
-
 
 # ============================================================
-# Training
+# Train only if saved model does not exist
 # ============================================================
 
-model.reset_model()
+if os.path.exists(save_model_path):
+    print(f"\nFound trained SHARP model at: {save_model_path}")
+    print("Skipping training and loading model directly for evaluation.")
 
-ii = 0
-tokens_seen = 0
-h_ = None
+    state = torch.load(save_model_path, map_location=device)
+    model.load_state_dict(state)
+    model.to(device)
 
-correct_ring = np.zeros(1000, dtype=np.float32)
-bits_ring = np.zeros(1000, dtype=np.float32)
+else:
+    print("\nNo trained model found. Starting training.")
+    print("Training SHARP on PG-19")
+    print("X: dense GPT-2 embedding windows")
+    print("Y: next GPT-2 token ID")
+    print("Output: full softmax over GPT-2 vocabulary")
 
-for rep in range(1):
-    for book_idx, encoded_book in enumerate(train_books_encoded):
-        print(
-            f"\n=== Training on book {book_idx + 1}/{len(train_books_encoded)} "
-            f"| GPT-2 tokens={len(encoded_book):,} ===",
-            flush=True,
-        )
+    model.reset_model()
 
-        ds = PG19GPT2Dataset(encoded_book, short_term_memory=short_term_memory)
+    ii = 0
+    tokens_seen = 0
+    h_ = None
 
-        loader = DataLoader(
-            ds,
-            batch_size=1,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=False,
-        )
+    correct_ring = np.zeros(1000, dtype=np.float32)
+    bits_ring = np.zeros(1000, dtype=np.float32)
 
-        h_ = None
-        model.reset_model()
-
-        for x_ids, y_token in tqdm(loader):
-            y_token = y_token.to(model.device)
-
-            with torch.no_grad():
-                x_dense = ids_to_gpt2_embeddings(x_ids).to(model.device)
-
-            logits, loss, recon_loss, h_ = wake_step_denseX_tokenY(
-                model,
-                x_dense,
-                y_token,
-                h_,
+    for rep in range(1):
+        for book_idx, encoded_book in enumerate(train_books_encoded):
+            print(
+                f"\n=== Training on book {book_idx + 1}/{len(train_books_encoded)} "
+                f"| GPT-2 tokens={len(encoded_book):,} ===",
+                flush=True,
             )
 
-            with torch.no_grad():
-                ii += 1
-                tokens_seen += 1
+            ds = PG19GPT2Dataset(encoded_book, short_term_memory=short_term_memory)
 
-                ring_idx = ii % 1000
-                bits_ring[ring_idx] = compute_bpc(logits, y_token)
+            loader = DataLoader(
+                ds,
+                batch_size=1,
+                shuffle=False,
+                num_workers=0,
+                pin_memory=False,
+            )
 
-                pred_tok = logits.argmax(dim=-1)
-                correct_ring[ring_idx] = (pred_tok[0] == y_token[0]).item()
+            h_ = None
+            model.reset_model()
 
-                if ii % 1000 == 0:
-                    acc = float(np.mean(correct_ring))
-                    bits = float(np.mean(bits_ring))
+            for x_ids, y_token in tqdm(loader):
+                y_token = y_token.to(model.device)
 
-                    print(
-                        "Iter", ii,
-                        f"prediction loss: {loss:.8e}",
-                        f"Memory loss: {recon_loss:.8e}",
-                        "Acc:", acc,
-                        "Bits/token:", bits,
-                        f"| GPT-2 tokens seen: {tokens_seen:,}",
-                        flush=True,
-                    )
+                with torch.no_grad():
+                    x_dense = ids_to_gpt2_embeddings(x_ids).to(model.device)
 
-            if ii % sleep_every == 0:
-                sleep_step_dense(
+                logits, loss, recon_loss, h_ = wake_step_denseX_tokenY(
                     model,
-                    total_steps=sleep_total_steps,
-                    verbose=False,
-                    topk=50,
+                    x_dense,
+                    y_token,
+                    h_,
                 )
 
+                with torch.no_grad():
+                    ii += 1
+                    tokens_seen += 1
 
-# ============================================================
-# Save model
-# ============================================================
+                    ring_idx = ii % 1000
+                    bits_ring[ring_idx] = compute_bpc(logits, y_token)
 
-torch.save(model.state_dict(), save_model_path)
-print("\nSaved model to:", save_model_path)
+                    pred_tok = logits.argmax(dim=-1)
+                    correct_ring[ring_idx] = (pred_tok[0] == y_token[0]).item()
+
+                    if ii % 1000 == 0:
+                        acc = float(np.mean(correct_ring))
+                        bits = float(np.mean(bits_ring))
+
+                        print(
+                            "Iter", ii,
+                            f"prediction loss: {loss:.8e}",
+                            f"Memory loss: {recon_loss:.8e}",
+                            "Acc:", acc,
+                            "Bits/token:", bits,
+                            f"| GPT-2 tokens seen: {tokens_seen:,}",
+                            flush=True,
+                        )
+
+                if ii % sleep_every == 0:
+                    sleep_step_dense(
+                        model,
+                        total_steps=sleep_total_steps,
+                        verbose=False,
+                        topk=50,
+                    )
+
+    torch.save(model.state_dict(), save_model_path)
+    print("\nSaved model to:", save_model_path)
 
 
 # ============================================================
@@ -785,11 +820,14 @@ backward_books = train_books_encoded[:num_backward_books]
 current_books = train_books_encoded[-num_current_books:]
 forward_books = holdout_books_encoded
 
+print("\nStarting final evaluation...")
+
 forward_bits, forward_acc = evaluate_books(
     model,
     forward_books,
     short_term_memory=short_term_memory,
     max_tokens_per_book=max_eval_tokens_per_book,
+    name="forward",
 )
 
 backward_bits, backward_acc = evaluate_books(
@@ -797,6 +835,7 @@ backward_bits, backward_acc = evaluate_books(
     backward_books,
     short_term_memory=short_term_memory,
     max_tokens_per_book=max_eval_tokens_per_book,
+    name="backward",
 )
 
 current_bits, current_acc = evaluate_books(
@@ -804,6 +843,7 @@ current_bits, current_acc = evaluate_books(
     current_books,
     short_term_memory=short_term_memory,
     max_tokens_per_book=max_eval_tokens_per_book,
+    name="current",
 )
 
 print("\n================ FINAL EVALUATION ================")
@@ -818,6 +858,7 @@ print("=================================================\n")
 # ============================================================
 
 summary = {
+    "model": "SHARP",
     "forward_bits_per_token": forward_bits,
     "forward_acc": forward_acc,
     "backward_bits_per_token": backward_bits,
@@ -837,6 +878,9 @@ summary = {
     "total_layers": total_layers,
     "head_layers": head_layers,
     "short_term_memory": short_term_memory,
+    "sleep_every": sleep_every,
+    "sleep_total_steps": sleep_total_steps,
+    "save_model_path": save_model_path,
 }
 
 with open(save_summary_path, "wb") as handle:
