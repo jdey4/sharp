@@ -1,3 +1,5 @@
+# train_pg19_gpt2_recurrent_full_softmax.py
+
 from sharp.utils import compute_bpc
 
 import torch
@@ -18,6 +20,18 @@ from transformers import AutoTokenizer, AutoModel
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 print("Using device:", device)
+
+
+# ============================================================
+# Choose baseline
+# ============================================================
+
+# Choose one: "rnn", "lstm", "gru"
+recurrent_type = "gru"
+
+assert recurrent_type in ["rnn", "lstm", "gru"], (
+    "recurrent_type must be one of: 'rnn', 'lstm', 'gru'"
+)
 
 
 # ============================================================
@@ -157,12 +171,13 @@ class PG19GPT2Dataset(Dataset):
 
 
 # ============================================================
-# RNN baseline model
+# Recurrent baseline model: RNN / LSTM / GRU
 # ============================================================
 
-class GPT2RNNFullSoftmax(nn.Module):
+class GPT2RecurrentFullSoftmax(nn.Module):
     def __init__(
         self,
+        recurrent_type="rnn",
         input_dim=768,
         hidden_size=512,
         num_layers=4,
@@ -172,20 +187,41 @@ class GPT2RNNFullSoftmax(nn.Module):
     ):
         super().__init__()
 
+        recurrent_type = recurrent_type.lower()
+        assert recurrent_type in ["rnn", "lstm", "gru"]
+
+        self.recurrent_type = recurrent_type
         self.input_dim = input_dim
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.vocab_size = vocab_size
         self.head_layers = head_layers
 
-        self.rnn = nn.RNN(
-            input_size=input_dim,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            nonlinearity="tanh",
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-        )
+        if recurrent_type == "rnn":
+            self.recurrent = nn.RNN(
+                input_size=input_dim,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                nonlinearity="tanh",
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
+        elif recurrent_type == "lstm":
+            self.recurrent = nn.LSTM(
+                input_size=input_dim,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
+        elif recurrent_type == "gru":
+            self.recurrent = nn.GRU(
+                input_size=input_dim,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
 
         head = []
         for _ in range(max(head_layers - 1, 0)):
@@ -209,13 +245,20 @@ class GPT2RNNFullSoftmax(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        for name, p in self.rnn.named_parameters():
+        for name, p in self.recurrent.named_parameters():
             if "weight_ih" in name:
                 nn.init.xavier_uniform_(p)
             elif "weight_hh" in name:
                 nn.init.orthogonal_(p)
             elif "bias" in name:
                 nn.init.zeros_(p)
+
+                # Optional but standard-ish LSTM forget-gate bias.
+                # PyTorch gate order for LSTM: input, forget, cell, output.
+                if self.recurrent_type == "lstm":
+                    hidden = self.hidden_size
+                    with torch.no_grad():
+                        p[hidden:2 * hidden].fill_(1.0)
 
         for m in self.head:
             if isinstance(m, nn.Linear):
@@ -225,12 +268,33 @@ class GPT2RNNFullSoftmax(nn.Module):
     def forward(self, x_dense, h=None):
         """
         x_dense: [B, T, 768]
-        h: [num_layers, B, hidden_size] or None
+        h:
+            RNN/GRU:  [num_layers, B, hidden_size] or None
+            LSTM:     tuple(h, c), each [num_layers, B, hidden_size], or None
         """
-        out, h_next = self.rnn(x_dense, h)
+        out, h_next = self.recurrent(x_dense, h)
         z = out[:, -1, :]          # [B, H]
         logits = self.head(z)      # [B, vocab]
         return logits, h_next
+
+
+# ============================================================
+# Hidden-state detach helper
+# ============================================================
+
+def detach_hidden(h):
+    """
+    Works for:
+        RNN/GRU hidden state: Tensor
+        LSTM hidden state: tuple(h, c)
+    """
+    if h is None:
+        return None
+
+    if isinstance(h, tuple):
+        return tuple(v.detach() for v in h)
+
+    return h.detach()
 
 
 # ============================================================
@@ -278,11 +342,10 @@ def evaluate_books(
         ):
             y_token = y_token.view(-1).long().to(device)
 
-            with torch.no_grad():
-                x_dense = ids_to_gpt2_embeddings(x_ids).to(device)
+            x_dense = ids_to_gpt2_embeddings(x_ids).to(device)
 
             logits, h = model(x_dense, h)
-            h = h.detach()
+            h = detach_hidden(h)
 
             bits = compute_bpc(logits, y_token)
             pred_tok = logits.argmax(dim=-1)
@@ -316,8 +379,15 @@ hidden_size = 512
 lr = 1e-4
 weight_decay = 1e-12
 
-save_model_path = "../saved_models/pg19_models/model1_pg19_gpt2_rnn_fullsoftmax.pt"
-save_summary_path = "../pickle_files/result_pg19_gpt2_rnn_fullsoftmax.pickle"
+save_model_path = (
+    f"../saved_models/pg19_models/"
+    f"model1_pg19_gpt2_{recurrent_type}_fullsoftmax.pt"
+)
+
+save_summary_path = (
+    f"../pickle_files/"
+    f"result_pg19_gpt2_{recurrent_type}_fullsoftmax.pickle"
+)
 
 os.makedirs("../saved_models/pg19_models", exist_ok=True)
 os.makedirs("../pickle_files", exist_ok=True)
@@ -343,10 +413,11 @@ print("First 5 train book lengths:", [len(x) for x in train_books_encoded[:5]])
 
 
 # ============================================================
-# Build RNN model
+# Build recurrent model
 # ============================================================
 
-model = GPT2RNNFullSoftmax(
+model = GPT2RecurrentFullSoftmax(
+    recurrent_type=recurrent_type,
     input_dim=GPT2_EMBED_DIM,
     hidden_size=hidden_size,
     num_layers=total_layers,
@@ -361,11 +432,12 @@ optimizer = torch.optim.Adam(
     weight_decay=weight_decay,
 )
 
-print("\n===== RNN Baseline Summary =====")
+print(f"\n===== {recurrent_type.upper()} Baseline Summary =====")
 print("Input: dense GPT-2 embedding windows")
 print("Target: next GPT-2 token ID")
 print("Output: full softmax over GPT-2 vocabulary")
-print("RNN layers:", total_layers)
+print("Recurrent type:", recurrent_type)
+print("Recurrent layers:", total_layers)
 print("Hidden size:", hidden_size)
 print("Prediction head layers:", head_layers)
 print("Short-term memory:", short_term_memory)
@@ -379,7 +451,7 @@ print("================================\n")
 # ============================================================
 
 if os.path.exists(save_model_path):
-    print(f"\nFound trained RNN model at: {save_model_path}")
+    print(f"\nFound trained {recurrent_type.upper()} model at: {save_model_path}")
     print("Skipping training and loading model directly for evaluation.")
 
     state = torch.load(save_model_path, map_location=device)
@@ -387,8 +459,8 @@ if os.path.exists(save_model_path):
     model.to(device)
 
 else:
-    print("\nNo trained RNN model found. Starting training.")
-    print("Training RNN on PG-19")
+    print(f"\nNo trained {recurrent_type.upper()} model found. Starting training.")
+    print(f"Training {recurrent_type.upper()} on PG-19")
     print("X: dense GPT-2 embedding windows")
     print("Y: next GPT-2 token ID")
     print("Output: full softmax over GPT-2 vocabulary")
@@ -404,7 +476,8 @@ else:
     for rep in range(1):
         for book_idx, encoded_book in enumerate(train_books_encoded):
             print(
-                f"\n=== Training RNN on book {book_idx + 1}/{len(train_books_encoded)} "
+                f"\n=== Training {recurrent_type.upper()} on book "
+                f"{book_idx + 1}/{len(train_books_encoded)} "
                 f"| GPT-2 tokens={len(encoded_book):,} ===",
                 flush=True,
             )
@@ -436,7 +509,7 @@ else:
                 optimizer.step()
 
                 # Truncated streaming credit assignment.
-                h = h.detach()
+                h = detach_hidden(h)
 
                 with torch.no_grad():
                     ii += 1
@@ -462,7 +535,7 @@ else:
                         )
 
     torch.save(model.state_dict(), save_model_path)
-    print("\nSaved RNN model to:", save_model_path)
+    print(f"\nSaved {recurrent_type.upper()} model to:", save_model_path)
 
 
 # ============================================================
@@ -503,6 +576,7 @@ current_bits, current_acc = evaluate_books(
 )
 
 print("\n================ FINAL EVALUATION ================")
+print(f"Model    | {recurrent_type.upper()}")
 print(f"Forward  | Bits/token: {forward_bits:.6f} | Acc: {forward_acc:.6f}")
 print(f"Backward | Bits/token: {backward_bits:.6f} | Acc: {backward_acc:.6f}")
 print(f"Current  | Bits/token: {current_bits:.6f} | Acc: {current_acc:.6f}")
@@ -514,7 +588,8 @@ print("=================================================\n")
 # ============================================================
 
 summary = {
-    "model": "RNN",
+    "model": recurrent_type.upper(),
+    "recurrent_type": recurrent_type,
     "forward_bits_per_token": forward_bits,
     "forward_acc": forward_acc,
     "backward_bits_per_token": backward_bits,
@@ -541,4 +616,4 @@ summary = {
 with open(save_summary_path, "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print("Saved RNN evaluation summary to:", save_summary_path)
+print("Saved evaluation summary to:", save_summary_path)
