@@ -286,7 +286,7 @@ print("First 5 train book lengths:", [len(x) for x in train_books_encoded[:5]])
 model_no = 1
 
 total_layers = 5
-head_layers = 2
+head_layers = 4
 short_term_memory = 4
 vocab_size = 27
 
@@ -301,6 +301,7 @@ model = Model(
 
     # ---- Learning rates per layer ----
     lr_layers=1e-4,
+    lr_slowdown_factor = 0.25,
 
     # ---- Optimizer type ----
     optimizer_class=torch.optim.Adam,
@@ -321,20 +322,20 @@ model.summary()
 
 # model.load_state_dict(torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt"))
 
-ckpt = torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt", map_location=device)
-model_dict = model.state_dict()
+# ckpt = torch.load("../saved_models/pg19_models/model1_pg19_100M_cap2M_memlite.pt", map_location=device)
+# model_dict = model.state_dict()
 
-filtered_ckpt = {}
+# filtered_ckpt = {}
 
-for k, v in ckpt.items():
-    if k.startswith("memories"):
-        # print("Found memory layer 0 weights, loading into model:", k)
-        filtered_ckpt[k] = v
-    # elif k.startswith("heads"):
-    #     filtered_ckpt[k] = v
+# for k, v in ckpt.items():
+#     if k.startswith("memories"):
+#         # print("Found memory layer 0 weights, loading into model:", k)
+#         filtered_ckpt[k] = v
+#     elif k.startswith("heads"):
+#         filtered_ckpt[k] = v
 
-model_dict.update(filtered_ckpt)
-model.load_state_dict(model_dict)
+# model_dict.update(filtered_ckpt)
+# model.load_state_dict(model_dict)
 #%%
 # ============================================================
 # Step 6: Training loop (1 rep only)
@@ -359,8 +360,8 @@ for rep in range(1):
             f"| chars={len(encoded_book):,} ==="
         )
 
-        if book_idx > 10:
-            continue
+        # if book_idx < 259 or book_idx>271:
+        #     continue
 
         train_data_set = PG19SequenceDataset(
             encoded_book,
@@ -384,36 +385,33 @@ for rep in range(1):
 
             logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
-            # with torch.no_grad():
-            #     ii += 1
-            #     chars_seen += 1
+            with torch.no_grad():
+                ii += 1
+                chars_seen += 1
 
-            #     ring_idx = ii % 1000
-            #     bpc_train[ring_idx] = compute_bpc(logits, y)
-            #     pred_tok = logits.argmax(dim=-1)
-            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
+                ring_idx = ii % 1000
+                bpc_train[ring_idx] = compute_bpc(logits, y)
+                pred_tok = logits.argmax(dim=-1)
+                correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
 
-            #     if ii % 1000 == 0:
-            #         acc = float(np.mean(correct_ring))
-            #         bpc = float(np.mean(bpc_train))
+                if ii % 1000 == 0:
+                    acc = float(np.mean(correct_ring))
+                    bpc = float(np.mean(bpc_train))
 
-            #         print(
-            #             "Iter", ii,
-            #             f"prediction loss: {loss:.8e}",
-            #             f"Memory loss: {recon_loss:.8e}",
-            #             "Acc:", acc,
-            #             "BPC:", bpc,
-            #             f"| chars seen in training stream: {chars_seen:,}"
-            #         )
+                    print(
+                        "Iter", ii,
+                        f"prediction loss: {loss:.8e}",
+                        f"Memory loss: {recon_loss:.8e}",
+                        "Acc:", acc,
+                        "BPC:", bpc,
+                        f"| chars seen in training stream: {chars_seen:,}"
+                    )
 
-            #         if model.sleeping:
-            #             print("Sleep on", model.recon_loss_ema)
-
-            # if ii % 20000 == 0:
-            #     if model.sleeping:
-            #         print("Sleep on ", model.recon_loss_ema)
-            #     # print("Total Iter ", ii)
-            #     model.sleep_step(total_steps=1025)
+            if ii % 20000 == 0:
+                # if model.sleeping:
+                #     print("Sleep on ", model.recon_loss_ema)
+                # print("Total Iter ", ii)
+                model.sleep_step(total_steps=1025)
             
             # if ii%40000==0:
             #     break
@@ -426,7 +424,7 @@ for rep in range(1):
 os.makedirs("../saved_models/pg19_models", exist_ok=True)
 torch.save(
     model.state_dict(),
-    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite.pt"
+    f"../saved_models/pg19_models/model{model_no}_pg19_100M_cap2M_memlite_head4_lr_decay_025.pt"
 )
 
 #%%
@@ -492,7 +490,7 @@ summary = {
 }
 
 os.makedirs("../pickle_files", exist_ok=True)
-with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle", "wb") as handle:
+with open("../pickle_files/result_pg19_subset_100M_cap2M_memlite_head4_lr_decay_025.pickle", "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 print("Saved evaluation summary to ../pickle_files/result_pg19_subset_100M_cap2M_memlite.pickle")

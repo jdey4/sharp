@@ -153,24 +153,24 @@ for _ in range(1):
                 # if model.sleeping:
                 #     print("Sleep on ", model.recon_loss_ema)
 
-        # if ii%20000==0:
-        #     model.sleep_step(total_steps=1025)
+        if ii%20000==0:
+            model.sleep_step(total_steps=1025)
 
 # %%
 # summary = (res_acc, res_bpc)
 # with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
 #     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
-os.makedirs("../saved_models/sleepless_models", exist_ok=True)
-torch.save(
-    model.state_dict(),
-    f"../saved_models/sleepless_models/model{model_no}_text8.pt"
-)
-
-# os.makedirs("../saved_models/sleep_models", exist_ok=True)
+# os.makedirs("../saved_models/sleepless_models", exist_ok=True)
 # torch.save(
 #     model.state_dict(),
-#     f"../saved_models/sleep_models/model{model_no}_text8.pt"
+#     f"../saved_models/sleepless_models/model{model_no}_text8.pt"
 # )
+
+os.makedirs("../saved_models/sleep_models", exist_ok=True)
+torch.save(
+    model.state_dict(),
+    f"../saved_models/sleep_models/model{model_no}_text8.pt"
+)
 #%%
 # model = Model(    
 #         total_layers = total_layers,

@@ -1,34 +1,76 @@
 #%%
-# from source.utils import compute_bpc
+import os
+import re
+import math
+import pickle
+import numpy as np
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
-import os
-import re
-from tqdm import tqdm
-import pickle
+import torch.nn.functional as F
 
-# Hugging Face datasets
-# pip install datasets
 from datasets import load_dataset
-from sharp.utils import compute_bpc
 
-#%%
-device = "cpu"  # change to "cuda" if running on GPU server
+
+# ============================================================
+# Device
+# ============================================================
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+
 print("Using device:", device)
+
+if device == "cuda":
+    torch.backends.cudnn.benchmark = True
+
+use_amp = (device == "cuda")
+scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+
 
 # ------------------------------------------------------------
 # Choose baseline type here
 # ------------------------------------------------------------
-model_type = "gru"   # options: "rnn", "gru", "lstm"
+model_type = "lstm"   # options: "rnn", "gru", "lstm"
+
+
+# ------------------------------------------------------------
+# Training speed knobs
+# ------------------------------------------------------------
+stream_batch_size = 256   # number of parallel streams within a book
+short_term_memory = 4     # truncated BPTT window length
+eval_batch_size = 256     # larger is fine for eval
+num_workers = 4 if device == "cuda" else 0
+
+
+# ============================================================
+# Utility
+# ============================================================
+def compute_bpc(logits, targets):
+    """
+    logits: (B, V)
+    targets: (B,)
+    """
+    loss = F.cross_entropy(logits, targets, reduction="mean")
+    return float(loss.item() / np.log(2.0))
+
+
+def detach_hidden(h):
+    if h is None:
+        return None
+    if isinstance(h, tuple):  # LSTM
+        return tuple(v.detach() for v in h)
+    return h.detach()
+
 
 #%%
 # ============================================================
 # Step 1: PG-19 loading + preprocessing
 # ============================================================
-
 def normalize_to_27_vocab(text):
     """
     Convert raw book text into the same 27-symbol vocabulary as text8:
@@ -36,21 +78,14 @@ def normalize_to_27_vocab(text):
       - keep only a-z
       - replace everything else with space
       - collapse repeated spaces
-
-    Returns:
-        normalized string containing only [a-z ].
     """
     text = text.lower()
-    text = re.sub(r"[^a-z]+", " ", text)   # anything not a-z -> space
-    text = re.sub(r"\s+", " ", text)       # collapse repeated spaces
+    text = re.sub(r"[^a-z]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
 def build_fixed_27_vocab():
-    """
-    Fixed vocabulary:
-      a-z plus space
-    """
     chars = list("abcdefghijklmnopqrstuvwxyz ")
     stoi = {ch: i for i, ch in enumerate(chars)}
     itos = {i: ch for ch, i in stoi.items()}
@@ -58,13 +93,10 @@ def build_fixed_27_vocab():
 
 
 def encode(text, stoi):
-    return np.fromiter((stoi[c] for c in text), dtype=np.int32, count=len(text))
+    return np.fromiter((stoi[c] for c in text), dtype=np.int64, count=len(text))
 
 
 def _extract_text_field(example):
-    """
-    PG-19 mirrors may expose text under slightly different field names.
-    """
     for key in ["text", "book_text", "content", "document", "story"]:
         if key in example and example[key] is not None:
             return example[key]
@@ -78,15 +110,6 @@ def load_pg19_books_by_token_budget(
     min_book_chars=20_000,
     max_eval_chars_per_book=1_000_000,
 ):
-    """
-    Load PG-19 and accumulate training books until we reach at least
-    `target_train_chars` normalized characters.
-
-    IMPORTANT:
-      - each training book is capped at max_train_chars_per_book
-      - holdout books are taken from validation (or test)
-      - holdout books are optionally truncated for faster evaluation
-    """
     print("Loading PG-19 from Hugging Face datasets...")
     ds = load_dataset("fla-hub/pg19")
 
@@ -152,38 +175,56 @@ def load_pg19_books_by_token_budget(
 
 #%%
 # ============================================================
-# Step 2: Memory-efficient dataset wrapper
+# Step 2: Stream batching helpers
 # ============================================================
-
-class PG19SequenceDataset(Dataset):
+def make_book_stream_tensors(encoded_book, batch_size):
     """
-    Memory-efficient next-token dataset.
+    Turn one long encoded book into B parallel streams.
 
-    Instead of building all subsequences in memory, this dataset stores only
-    the encoded book and slices windows on demand.
+    Returns:
+        data:    (B, S)
+        targets: (B, S)
+    where each row is one contiguous stream.
     """
-    def __init__(self, encoded_text, short_term_memory=8):
-        self.encoded_text = encoded_text
-        self.short_term_memory = short_term_memory
-        self.n = len(encoded_text) - short_term_memory
+    encoded_book = np.asarray(encoded_book, dtype=np.int64)
 
-    def __len__(self):
-        return max(0, self.n)
+    usable = (len(encoded_book) - 1) // batch_size
+    if usable <= 1:
+        return None, None
 
-    def __getitem__(self, index):
-        x = self.encoded_text[index:index + self.short_term_memory]
-        y = self.encoded_text[index + self.short_term_memory]
+    total_tokens = usable * batch_size + 1
+    arr = encoded_book[:total_tokens]
 
-        x = torch.tensor(x, dtype=torch.long)
-        y = torch.tensor(y, dtype=torch.long)
-        return x, y
+    x = arr[:-1].reshape(batch_size, usable)
+    y = arr[1:].reshape(batch_size, usable)
+
+    return x, y
+
+
+def iter_stream_windows(x_streams, y_streams, seq_len):
+    """
+    Yield contiguous windows from stream-batched tensors.
+
+    x_streams, y_streams: (B, S)
+    Returns x, y where:
+        x: (B, T)
+        y: (B,)
+    using target at the final step of each window.
+    """
+    B, S = x_streams.shape
+    if S <= seq_len:
+        return
+
+    for start in range(0, S - seq_len):
+        x = x_streams[:, start:start + seq_len]
+        y = y_streams[:, start + seq_len - 1]
+        yield x, y
 
 
 #%%
 # ============================================================
 # Step 3: Baseline model
 # ============================================================
-
 class CharRNNBaseline(nn.Module):
     def __init__(
         self,
@@ -234,10 +275,10 @@ class CharRNNBaseline(nn.Module):
           - RNN/GRU: (num_layers, B, H)
           - LSTM: ((num_layers, B, H), (num_layers, B, H))
         """
-        x = x.to(self.device)
-        emb = self.embedding(x)               # (B, T, E)
-        out, h = self.rnn(emb, h)            # out: (B, T, H)
-        logits = self.readout(out[:, -1, :]) # (B, V)
+        x = x.to(self.device, non_blocking=True)
+        emb = self.embedding(x)
+        out, h = self.rnn(emb, h)
+        logits = self.readout(out[:, -1, :])
         return logits, h
 
 
@@ -245,67 +286,46 @@ class CharRNNBaseline(nn.Module):
 # ============================================================
 # Step 4: Evaluation helper
 # ============================================================
-
-def reset_hidden_state(model):
-    """
-    Reset recurrent hidden state between books during evaluation.
-    """
-    return None
-
-
 @torch.no_grad()
-def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_book=None):
-    """
-    Evaluate average BPC and accuracy over a list of encoded books.
-    Hidden state is passed sequentially within each book.
-    """
+def evaluate_books(
+    model,
+    books_encoded,
+    short_term_memory=4,
+    max_tokens_per_book=None,
+    batch_size=256,
+):
     total_bpc = 0.0
     total_correct = 0
     total_count = 0
 
     model.eval()
 
-    for book_idx, encoded_book in enumerate(books_encoded):
+    for encoded_book in books_encoded:
         if max_tokens_per_book is not None:
             encoded_book = encoded_book[:max_tokens_per_book]
 
-        if len(encoded_book) <= short_term_memory:
+        if len(encoded_book) <= short_term_memory + 1:
             continue
 
-        ds = PG19SequenceDataset(
-            encoded_book,
-            short_term_memory=short_term_memory
-        )
-        loader = DataLoader(
-            ds,
-            batch_size=1,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=False
-        )
+        x_streams, y_streams = make_book_stream_tensors(encoded_book, batch_size)
+        if x_streams is None:
+            continue
 
-        h = reset_hidden_state(model)
+        x_streams = torch.from_numpy(x_streams).to(model.device, non_blocking=True)
+        y_streams = torch.from_numpy(y_streams).to(model.device, non_blocking=True)
 
-        for x, y in loader:
-            x = x.to(model.device)
-            y = y.to(model.device)
+        h = None
 
-            logits, h = model(x, h)
-            bpc = compute_bpc(logits, y)
+        for x, y in iter_stream_windows(x_streams, y_streams, short_term_memory):
+            logits, h = model(x)
+            # h = detach_hidden(h)
 
-            # detach recurrent state to avoid graph accumulation
-            if h is not None:
-                if isinstance(h, tuple):  # LSTM
-                    h = tuple(v.detach() for v in h)
-                else:
-                    h = h.detach()
-
+            total_bpc += compute_bpc(logits, y)
             pred_tok = logits.argmax(dim=-1)
-            total_correct += (pred_tok[0] == y[0]).item()
-            total_bpc += bpc
-            total_count += 1
+            total_correct += int((pred_tok == y).sum().item())
+            total_count += int(y.numel())
 
-    avg_bpc = total_bpc / max(total_count, 1)
+    avg_bpc = total_bpc / max(total_count / batch_size, 1e-8)
     avg_acc = total_correct / max(total_count, 1)
     return avg_bpc, avg_acc
 
@@ -314,20 +334,12 @@ def evaluate_books(model, books_encoded, short_term_memory=4, max_tokens_per_boo
 # ============================================================
 # Step 5: Load PG-19 subset by total token budget
 # ============================================================
-
 stoi, itos = build_fixed_27_vocab()
 
-# ------------------------------------------------------------
-# Main token budget
-# ------------------------------------------------------------
 target_train_chars = 100_000_000
 max_train_chars_per_book = 2_000_000
 max_holdout_books = 5
 min_book_chars = 20_000
-
-# ------------------------------------------------------------
-# Evaluation size control
-# ------------------------------------------------------------
 max_eval_chars_per_book = 1_000_000
 
 train_books_raw, holdout_books_raw, total_train_chars = load_pg19_books_by_token_budget(
@@ -345,13 +357,12 @@ print("Number of training books:", len(train_books_encoded))
 print("Number of holdout books:", len(holdout_books_encoded))
 print("First 5 train book lengths:", [len(x) for x in train_books_encoded[:5]])
 
+
 #%%
 # ============================================================
 # Step 6: Build baseline model
 # ============================================================
-
 model_no = 1
-short_term_memory = 4
 vocab_size = 27
 
 embedding_dim = 100
@@ -359,124 +370,7 @@ hidden_size = 512
 num_layers = 5
 lr = 1e-4
 weight_decay = 1e-12
-
-#%%
-model = CharRNNBaseline(
-    vocab_size=vocab_size,
-    embedding_dim=embedding_dim,
-    hidden_size=hidden_size,
-    num_layers=num_layers,
-    model_type=model_type,
-    device=device
-).to(device)
-
-optimizer = torch.optim.Adam(
-    model.parameters(),
-    lr=lr,
-    weight_decay=weight_decay
-)
-
-criterion = nn.CrossEntropyLoss()
-
-print(model)
-
-#%%
-# ============================================================
-# Step 7: Training loop (1 rep only)
-# Train sequentially book by book until all selected books are consumed
-# ============================================================
-
-print(f"\nTraining {model_type.upper()} baseline on PG-19 subset with {target_train_chars:,} normalized chars")
-print(f"Each training book capped at {max_train_chars_per_book:,} chars")
-
-model.train()
-
-ii = 0
-chars_seen = 0
-h = None
-correct_ring = np.zeros(1000, dtype=np.float32)
-bpc_train = np.zeros(1000, dtype=np.float32)
-
-for rep in range(1):
-    for book_idx, encoded_book in enumerate(train_books_encoded):
-        print(
-            f"\n=== Training on book {book_idx + 1}/{len(train_books_encoded)} "
-            f"| chars={len(encoded_book):,} ==="
-        )
-
-        train_data_set = PG19SequenceDataset(
-            encoded_book,
-            short_term_memory=short_term_memory
-        )
-        loader = DataLoader(
-            train_data_set,
-            batch_size=1,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=False
-        )
-
-        # Reset recurrent hidden state between books
-        h = None
-
-        for x, y in tqdm(loader):
-            x = x.to(device)
-            y = y.to(device)
-
-            optimizer.zero_grad(set_to_none=True)
-
-            logits, h = model(x, h)
-            loss = criterion(logits, y)
-
-            loss.backward()
-            optimizer.step()
-
-            # truncate BPTT to one training window
-            if h is not None:
-                if isinstance(h, tuple):  # LSTM
-                    h = tuple(v.detach() for v in h)
-                else:
-                    h = h.detach()
-
-            # with torch.no_grad():
-            #     ii += 1
-            #     chars_seen += 1
-
-            #     ring_idx = ii % 1000
-            #     bpc_train[ring_idx] = compute_bpc(logits, y)
-            #     pred_tok = logits.argmax(dim=-1)
-            #     correct_ring[ring_idx] = (pred_tok[0] == y[0]).item()
-
-            #     if ii % 1000 == 0:
-            #         acc = float(np.mean(correct_ring))
-            #         bpc = float(np.mean(bpc_train))
-
-            #         print(
-            #             "Iter", ii,
-            #             f"loss: {loss.item():.8e}",
-            #             "Acc:", acc,
-            #             "BPC:", bpc,
-            #             f"| chars seen in training stream: {chars_seen:,}"
-            #         )
-
-#%%
-# ============================================================
-# Step 8: Save model
-# ============================================================
-
-os.makedirs("../saved_models/pg19_models", exist_ok=True)
-torch.save(
-    model.state_dict(),
-    f"../saved_models/pg19_models/{model_type}_model{model_no}_pg19_100M_cap2M_memlite.pt"
-)
-
-#%%
-# ============================================================
-# Step 9: Evaluation
-#   - Forward BPC: holdout books
-#   - Backward BPC: first few training books
-#   - Current BPC: last few training books
-# ============================================================
+grad_clip = 1.0
 
 model = CharRNNBaseline(
     vocab_size=vocab_size,
@@ -487,13 +381,117 @@ model = CharRNNBaseline(
     device=device,
 ).to(device)
 
-# 3) load weights
-ckpt_path = f"/Users/jd/sharp/saved_models/pg19_models/{model_type}_model{model_no}_pg19_100M_cap2M_memlite.pt"
-state_dict = torch.load(ckpt_path, map_location=device)
-model.load_state_dict(state_dict)
-model.eval()
+if device == "cuda":
+    try:
+        model = torch.compile(model)
+        print("Using torch.compile")
+    except Exception as e:
+        print("torch.compile unavailable:", e)
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=lr,
+    weight_decay=weight_decay,
+)
+
+criterion = nn.CrossEntropyLoss()
+print(model)
 
 
+#%%
+# ============================================================
+# Step 7: Training loop
+# ============================================================
+print(f"\nTraining {model_type.upper()} baseline on PG-19 subset with {target_train_chars:,} normalized chars")
+print(f"Each training book capped at {max_train_chars_per_book:,} chars")
+print(f"Stream batch size: {stream_batch_size}")
+print(f"Short-term memory: {short_term_memory}")
+
+model.train()
+
+ii = 0
+chars_seen = 0
+correct_ring = np.zeros(1000, dtype=np.float32)
+bpc_ring = np.zeros(1000, dtype=np.float32)
+
+for rep in range(1):
+    for book_idx, encoded_book in enumerate(train_books_encoded):
+        print(
+            f"\n=== Training on book {book_idx + 1}/{len(train_books_encoded)} "
+            f"| chars={len(encoded_book):,} ==="
+        )
+
+        x_streams, y_streams = make_book_stream_tensors(encoded_book, stream_batch_size)
+        if x_streams is None:
+            print("Skipped: book too short for chosen stream batch size")
+            continue
+
+        x_streams = torch.from_numpy(x_streams).to(device, non_blocking=True)
+        y_streams = torch.from_numpy(y_streams).to(device, non_blocking=True)
+
+        h = None
+
+        total_steps = x_streams.shape[1] - short_term_memory
+        pbar = tqdm(
+            iter_stream_windows(x_streams, y_streams, short_term_memory),
+            total=total_steps,
+            desc=f"Book {book_idx + 1}",
+        )
+
+        for x, y in pbar:
+            optimizer.zero_grad(set_to_none=True)
+
+            with torch.amp.autocast(device_type="cuda", enabled=use_amp):
+                logits, h = model(x)
+                loss = criterion(logits, y)
+
+            scaler.scale(loss).backward()
+
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+            h = detach_hidden(h)
+
+            with torch.no_grad():
+                ii += 1
+                chars_seen += int(y.numel())
+
+                ring_idx = ii % 1000
+                bpc_ring[ring_idx] = compute_bpc(logits, y)
+                pred_tok = logits.argmax(dim=-1)
+                correct_ring[ring_idx] = float((pred_tok == y).float().mean().item())
+
+                if ii % 1000 == 0:
+                    acc = float(np.mean(correct_ring))
+                    bpc = float(np.mean(bpc_ring))
+                    pbar.set_postfix(
+                        loss=f"{loss.item():.4f}",
+                        acc=f"{acc:.4f}",
+                        bpc=f"{bpc:.4f}",
+                        chars_seen=f"{chars_seen:,}",
+                    )
+
+
+#%%
+# ============================================================
+# Step 8: Save model
+# ============================================================
+os.makedirs("../saved_models/pg19_models", exist_ok=True)
+model_save_path = f"../saved_models/pg19_models/{model_type}_model{model_no}_pg19_100M_cap2M_streambs{stream_batch_size}.pt"
+
+raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+torch.save(raw_model.state_dict(), model_save_path)
+print("Saved model to:", model_save_path)
+
+
+#%%
+# ============================================================
+# Step 9: Evaluation
+# ============================================================
 num_backward_books = min(5, len(train_books_encoded))
 num_current_books = min(5, len(train_books_encoded))
 
@@ -502,24 +500,27 @@ current_books = train_books_encoded[-num_current_books:]
 forward_books = holdout_books_encoded
 
 forward_bpc, forward_acc = evaluate_books(
-    model,
+    raw_model,
     forward_books,
     short_term_memory=short_term_memory,
-    max_tokens_per_book=max_eval_chars_per_book
+    max_tokens_per_book=max_eval_chars_per_book,
+    batch_size=eval_batch_size,
 )
 
 backward_bpc, backward_acc = evaluate_books(
-    model,
+    raw_model,
     backward_books,
     short_term_memory=short_term_memory,
-    max_tokens_per_book=max_eval_chars_per_book
+    max_tokens_per_book=max_eval_chars_per_book,
+    batch_size=eval_batch_size,
 )
 
 current_bpc, current_acc = evaluate_books(
-    model,
+    raw_model,
     current_books,
     short_term_memory=short_term_memory,
-    max_tokens_per_book=max_eval_chars_per_book
+    max_tokens_per_book=max_eval_chars_per_book,
+    batch_size=eval_batch_size,
 )
 
 print("\n================ FINAL EVALUATION ================")
@@ -529,11 +530,11 @@ print(f"Backward | BPC: {backward_bpc:.6f} | Acc: {backward_acc:.6f}")
 print(f"Current  | BPC: {current_bpc:.6f} | Acc: {current_acc:.6f}")
 print("=================================================\n")
 
+
 #%%
 # ============================================================
 # Step 10: Save summary
 # ============================================================
-
 summary = {
     "model_type": model_type,
     "forward_bpc": forward_bpc,
@@ -548,11 +549,15 @@ summary = {
     "actual_train_chars": total_train_chars,
     "max_train_chars_per_book": max_train_chars_per_book,
     "max_eval_chars_per_book": max_eval_chars_per_book,
+    "stream_batch_size": stream_batch_size,
+    "short_term_memory": short_term_memory,
+    "device": device,
 }
 
 os.makedirs("../pickle_files", exist_ok=True)
-with open(f"../pickle_files/result_pg19_{model_type}_100M_cap2M_memlite.pickle", "wb") as handle:
+summary_path = f"../pickle_files/result_pg19_{model_type}_100M_cap2M_streambs{stream_batch_size}.pickle"
+with open(summary_path, "wb") as handle:
     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-print(f"Saved evaluation summary to ../pickle_files/result_pg19_{model_type}_100M_cap2M_memlite.pickle")
+print(f"Saved evaluation summary to {summary_path}")
 # %%

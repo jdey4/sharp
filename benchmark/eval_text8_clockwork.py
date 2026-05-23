@@ -16,8 +16,8 @@ device = "mps" if torch.backends.mps.is_available() else "cpu"
 print("Using device:", device)
 
 model_type = "clockwork"
-model_dir = "/Users/jd/sharp/saved_models/baselines_clockwork"
-output_pickle = f"/Users/jd/sharp/pickle_files/text8_{model_type}_res.pickle"
+model_dir = "/Users/jd/sharp/saved_models/baselines_clockwork/run_100M"
+output_pickle = f"/Users/jd/sharp/pickle_files/text8_{model_type}_res_100M.pickle"
 
 #%%
 def download_text8(path="dataset/text8.zip"):

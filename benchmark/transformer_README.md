@@ -12,7 +12,7 @@ Pre-LN LLaMA-style transformer (RMSNorm, RoPE, SwiGLU) for char-level benchmarks
 All commands must be run from the `benchmark/` directory:
 
 ```bash
-cd /localdisk/ssrivas9/sharp/benchmark
+cd sharp/benchmark
 ```
 
 ## text8 training (9 models, sequential per config)

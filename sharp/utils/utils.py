@@ -130,7 +130,7 @@ def get_sequence(
     return out[:n_samples]
         
 
-def compute_bpc(logits, targets):
+def compute_bpc(logits, targets, max_bpc=4.755):
     """
     Computes Bits Per Character (BPC) from model logits and target indices.
 
@@ -150,7 +150,12 @@ def compute_bpc(logits, targets):
     
     # Convert from nats to bits
     bpc = loss_nats.item() / math.log(2)
+
+    if bpc>max_bpc:
+        bpc = max_bpc
+
     return bpc
+
 
 def evaluate_model(model, test_dataset, device="cpu", verbose=False, max_bpc=4.755):
     model.eval()

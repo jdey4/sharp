@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from torch import optim
 from collections import deque 
-from .prediction import PredictionFiLM
-from .memory import Memory
+from .prediction import PredictionFiLM, PredictionConcat
+from .memory import Memory, MemoryMultiHeadRecall
 
 
 class Model(nn.Module):
@@ -12,18 +12,23 @@ class Model(nn.Module):
 
         defaults = dict(
             total_layers = 3,
+            head_type = "film",
+            memory_type = "multihead",
             num_layers_prediction_head = 1,
+            input_size = None,
             vocab_size = None,
             hidden_sizes = None,
             embedding_dim = None,
             short_term_memory = 3,
             lr_layers = 1e-3,
+            lr_slowdown_factor = 0.1,
             recon_threshold = 1e-3,
             optimizer_class = optim.Adam,
             optimizer_kwargs = None,
             context_tag_buffer_size=10,
             accelerate=None,
             bad_init=False,
+            pretrained_embedding=False,
             device = "cpu",
         )
         for k, v in {**defaults, **kwargs}.items():
@@ -53,25 +58,55 @@ class Model(nn.Module):
         for l in range(self.total_layers):
             output_size = self.hidden_sizes[l-1] if l>0 else self.vocab_size
 
-            self.heads.append(
-                PredictionFiLM(
-                    self.hidden_sizes[l],
-                    output_size,
-                    num_layers=self.num_layers_prediction_head,
-                    context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+            if self.head_type == "concat":
+                self.heads.append(
+                    PredictionConcat(
+                        self.hidden_sizes[l],
+                        output_size,
+                        num_layers=self.num_layers_prediction_head,
+                        context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+                    )
                 )
-            )
+            else:
+                self.heads.append(
+                    PredictionFiLM(
+                        self.hidden_sizes[l],
+                        output_size,
+                        num_layers=self.num_layers_prediction_head,
+                        context_size=self.hidden_sizes[l] if l+1<self.total_layers else 0
+                    )
+                )
 
-            input_size = self.vocab_size if l == 0 else self.hidden_sizes[l-1]
-            self.memories.append(
-                Memory(
-                    input_size=input_size,
-                    hidden_size=self.hidden_sizes[l],
-                    embedding_dim=self.embedding_dim,
-                    layer=l,
-                    bad_init=self.bad_init
+            if l == 0 and self.pretrained_embedding is False:
+                input_size = self.vocab_size
+            elif l == 0 and self.pretrained_embedding is True:
+                input_size = self.input_size
+            else:
+                input_size = self.hidden_sizes[l-1]
+             
+
+            if self.memory_type == 'multihead':
+                self.memories.append(
+                    MemoryMultiHeadRecall(
+                        input_size=input_size,
+                        hidden_size=self.hidden_sizes[l],
+                        embedding_dim=self.embedding_dim,
+                        window_size=self.short_term_memory,
+                        layer=l,
+                        bad_init=self.bad_init,
+                        pretrained_embedding=self.pretrained_embedding
+                    )
                 )
-            )
+            else:
+                self.memories.append(
+                    Memory(
+                        input_size=input_size,
+                        hidden_size=self.hidden_sizes[l],
+                        embedding_dim=self.embedding_dim,
+                        layer=l,
+                        bad_init=self.bad_init
+                    )
+                )
 
         # ------------------------------------------------------------
         # 2. Define optmizers and loss function 
@@ -85,7 +120,7 @@ class Model(nn.Module):
 
         self.head_wake_opts = []
         for l, head in enumerate(self.heads):
-            lr_l = self.lr_layers * (0.1 ** l)   # head 0: lr, head 1: lr/10, head 2: lr/100, ...
+            lr_l = self.lr_layers * (self.lr_slowdown_factor ** l)   # head 0: lr, head 1: lr/10, head 2: lr/100, ...
             self.head_wake_opts.append(
                 self.optimizer_class(head.parameters(), lr=lr_l, **opt_kwargs)
             )
@@ -330,7 +365,7 @@ class Model(nn.Module):
                     input_buffer.append(h_states[target_layer-1])
                     input = torch.cat(list(input_buffer), dim=1)
 
-                    recon_logit, _, h_ = self.memories[target_layer](add_gaussian_noise(input), h_)
+                    recon_logit, _, h_ = self.memories[target_layer](input, h_)
                     h_ = h_.detach()
 
                     recon_loss = loss_func(recon_logit, input)

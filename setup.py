@@ -34,11 +34,11 @@ setup(
     long_description=LONG_DESCRIPTION,
     long_description_content_type="text/markdown",
     url="https://github.com/jdey4/sleep_experiment/",
-    license="MIT",
+    license="Apache",
     classifiers=[
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Mathematics",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: Apache License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.12",
     ],
