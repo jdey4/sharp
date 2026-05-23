@@ -17,19 +17,19 @@ from joblib import Parallel, delayed
 
 
 # ============================================================
+# Device
+# ============================================================
+device = "cpu"
+print("Using device:", device, flush=True)
+
+
+# ============================================================
 # Reproducibility
 # ============================================================
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
-
-# ============================================================
-# Device
-# ============================================================
-device = "cpu"
-print("Using device:", device)
 
 
 # ============================================================
@@ -106,7 +106,7 @@ def build_model(device, recon_threshold):
         context_tag_buffer_size=20,
         recon_threshold=recon_threshold,
 
-        bad_init=True,
+        bad_init=False,
         device=device,
     )
 
@@ -119,8 +119,10 @@ def build_model(device, recon_threshold):
 @torch.no_grad()
 def evaluate_dataset_existing_model(eval_model, eval_dataset, device, max_eval_tokens=None):
     """
-    Evaluates one dataset with an already-loaded eval_model.
-    The model is reset before evaluation so each split is evaluated independently.
+    Evaluate one split with an already-loaded eval model.
+
+    The model is reset inside this function so forward/current/backward
+    splits are evaluated independently.
     """
     eval_model.eval()
     eval_model.reset_model()
@@ -171,8 +173,10 @@ def evaluate_threeway(
     max_eval_tokens=None,
 ):
     """
-    Loads the train model once, then evaluates backward/current/forward
-    by resetting the eval model before each split.
+    Load train model once, then evaluate:
+      - backward: earliest stream region
+      - current: recent stream region
+      - forward: held-out future region
     """
     eval_model = build_model(
         device=device,
@@ -227,12 +231,15 @@ def make_eval_datasets(encoded, train_tokens, samples_seen, eval_tokens, short_t
     forward: held-out eval_tokens after train_tokens.
     """
 
+    # Earliest 100k tokens
     backward_encoded = encoded[:eval_tokens]
 
+    # Most recent 100k tokens seen so far
     current_end = min(samples_seen, train_tokens)
     current_start = max(0, current_end - eval_tokens)
     current_encoded = encoded[current_start:current_end]
 
+    # Held-out future 100k tokens
     forward_start = train_tokens
     forward_end = train_tokens + eval_tokens
     forward_encoded = encoded[forward_start:forward_end]
@@ -259,7 +266,14 @@ def make_eval_datasets(encoded, train_tokens, samples_seen, eval_tokens, short_t
 # Helpers
 # ============================================================
 def threshold_to_tag(threshold):
-    if threshold == 0:
+    """
+    Examples:
+      0      -> tau_0
+      1e-3   -> tau_1em03
+      1e-2   -> tau_1em02
+      1e-1   -> tau_1em01
+    """
+    if float(threshold) == 0.0:
         return "tau_0"
 
     tag = f"{threshold:.0e}"
@@ -268,10 +282,6 @@ def threshold_to_tag(threshold):
 
 
 def parse_thresholds(thresholds_str):
-    """
-    Example:
-        "0,1e-3,1e-1"
-    """
     vals = []
     for item in thresholds_str.split(","):
         item = item.strip()
@@ -298,19 +308,22 @@ def run_threshold_condition(
     save_root,
     seed,
     worker_id,
+    show_tqdm,
 ):
-    set_seed(seed)
+    set_seed(seed + worker_id)
 
+    tau = float(tau)
     tau_tag = threshold_to_tag(tau)
     condition_name = f"threshold_{tau_tag}"
 
     print(
-        f"\n==================== Running threshold: {tau} ({tau_tag}) ====================",
+        f"\n[START | worker={worker_id}] tau={tau} | tau_tag={tau_tag}",
         flush=True,
     )
 
     # ------------------------------------------------------------
     # Output paths
+    # KEEPING SAME FILE/DIRECTORY NAMES AS BEFORE
     # ------------------------------------------------------------
     partial_dir = os.path.join(
         save_root,
@@ -371,6 +384,12 @@ def run_threshold_condition(
         recon_threshold=tau,
     )
 
+    print(
+        f"[MODEL | worker={worker_id} | {tau_tag}] "
+        f"requested_tau={tau} | model.recon_threshold={model.recon_threshold}",
+        flush=True,
+    )
+
     model.summary()
     model.reset_model()
     model.train()
@@ -385,7 +404,7 @@ def run_threshold_condition(
     correct_ring = np.zeros(1000, dtype=np.float32)
     bpc_ring = np.zeros(1000, dtype=np.float32)
 
-    # Windowed and cumulative memory-update counters
+    # Windowed and cumulative wake memory-update counters
     interval_update_count = 0
     interval_total_count = 0
 
@@ -400,6 +419,7 @@ def run_threshold_condition(
         desc=f"Training {tau_tag}",
         position=worker_id,
         leave=True,
+        disable=(not show_tqdm),
     )
 
     for x, y in pbar:
@@ -412,10 +432,12 @@ def run_threshold_condition(
 
         # --------------------------------------------------------
         # Wake memory-update rate
-        # This mirrors the update gate inside wake_step:
+        #
+        # This mirrors the gate inside wake_step:
         #     recon_loss_ema > recon_threshold
-        # Sleep is also downstream of this gate because wake updates
-        # set model.sleeping=True.
+        #
+        # Sleep is downstream of this gate because a wake memory
+        # update sets model.sleeping=True.
         # --------------------------------------------------------
         did_memory_update = float(model.recon_loss_ema > model.recon_threshold)
 
@@ -477,24 +499,25 @@ def run_threshold_condition(
                 "condition": condition_name,
                 "threshold": tau,
                 "threshold_tag": tau_tag,
+                "model_recon_threshold": float(model.recon_threshold),
                 "samples seen": ii,
                 "sleep": 1,
 
-                # three-way BPC/accuracy
+                # Three-way BPC/accuracy
                 **eval_results,
 
-                # backward-compatible aliases
+                # Backward-compatible aliases
                 "eval_bpc": eval_results["forward_bpc"],
                 "eval_acc": eval_results["forward_acc"],
 
-                # training diagnostics
+                # Training diagnostics
                 "train_loss": float(loss),
                 "recon_loss": float(recon_loss),
                 "recon_loss_ema": float(model.recon_loss_ema),
                 "train_acc_window": float(np.mean(correct_ring)),
                 "train_bpc_window": float(np.mean(bpc_ring)),
 
-                # update-rate diagnostics
+                # Wake memory update-rate diagnostics
                 "memory_update_rate_window": float(update_rate_window),
                 "memory_skip_rate_window": float(skip_rate_window),
                 "memory_update_percent_window": float(100.0 * update_rate_window),
@@ -508,13 +531,14 @@ def run_threshold_condition(
                 "mean_recon_loss_interval": float(np.mean(interval_recon_losses)),
                 "mean_recon_loss_ema_interval": float(np.mean(interval_recon_emas)),
 
-                # metadata
+                # Metadata
                 "eval_tokens": eval_tokens,
                 "short_term_memory": short_term_memory,
                 "eval_every": eval_every,
                 "sleep_every": sleep_every,
                 "sleep_total_steps": sleep_total_steps,
                 "seed": seed,
+                "worker_id": worker_id,
             }
 
             results.append(row)
@@ -533,12 +557,14 @@ def run_threshold_condition(
             torch.save(model.state_dict(), latest_model_path)
 
             print(
-                f"[{tau_tag}] step={ii:,} | "
+                f"[CHECKPOINT | worker={worker_id} | {tau_tag}] "
+                f"tau={tau} | model_tau={model.recon_threshold} | "
+                f"step={ii:,} | "
                 f"F={eval_results['forward_bpc']:.4f} | "
                 f"C={eval_results['current_bpc']:.4f} | "
                 f"B={eval_results['backward_bpc']:.4f} | "
-                f"update={100.0 * update_rate_window:.2f}% | "
-                f"cum_update={100.0 * update_rate_cumulative:.2f}% | "
+                f"update_win={100.0 * update_rate_window:.2f}% | "
+                f"update_cum={100.0 * update_rate_cumulative:.2f}% | "
                 f"recon_ema={model.recon_loss_ema:.4e}",
                 flush=True,
             )
@@ -550,7 +576,11 @@ def run_threshold_condition(
             interval_recon_emas = []
 
         if max_train_steps is not None and ii >= max_train_steps:
-            print(f"[{tau_tag}] Reached max_train_steps={max_train_steps}.", flush=True)
+            print(
+                f"[STOP | worker={worker_id} | {tau_tag}] "
+                f"Reached max_train_steps={max_train_steps}.",
+                flush=True,
+            )
             break
 
     # ------------------------------------------------------------
@@ -569,12 +599,12 @@ def run_threshold_condition(
 
     torch.save(model.state_dict(), final_model_path)
 
-    print(f"\n[{tau_tag}] Saved partial pickle to: {partial_path}", flush=True)
-    print(f"[{tau_tag}] Saved partial CSV to: {partial_csv_path}", flush=True)
-    print(f"[{tau_tag}] Saved latest model to: {latest_model_path}", flush=True)
-    print(f"[{tau_tag}] Saved final pickle to: {final_path}", flush=True)
-    print(f"[{tau_tag}] Saved final CSV to: {final_csv_path}", flush=True)
-    print(f"[{tau_tag}] Saved final model to: {final_model_path}", flush=True)
+    print(f"\n[DONE | worker={worker_id} | {tau_tag}] Saved partial pickle to: {partial_path}", flush=True)
+    print(f"[DONE | worker={worker_id} | {tau_tag}] Saved partial CSV to: {partial_csv_path}", flush=True)
+    print(f"[DONE | worker={worker_id} | {tau_tag}] Saved latest model to: {latest_model_path}", flush=True)
+    print(f"[DONE | worker={worker_id} | {tau_tag}] Saved final pickle to: {final_path}", flush=True)
+    print(f"[DONE | worker={worker_id} | {tau_tag}] Saved final CSV to: {final_csv_path}", flush=True)
+    print(f"[DONE | worker={worker_id} | {tau_tag}] Saved final model to: {final_model_path}", flush=True)
 
     print(df.tail(), flush=True)
 
@@ -590,7 +620,7 @@ def main():
     parser.add_argument(
         "--thresholds",
         type=str,
-        default="0,1e-3,1e-1",
+        default="0,1e-1,1e-2,1e-3",
         help="Comma-separated reconstruction thresholds. Default excludes 1e-2 because it already exists.",
     )
 
@@ -654,6 +684,13 @@ def main():
         default="dataset/text8.zip",
     )
 
+    parser.add_argument(
+        "--show_tqdm",
+        type=int,
+        default=0,
+        help="0 disables tqdm progress bars in parallel runs to avoid mixed terminal output.",
+    )
+
     args = parser.parse_args()
 
     torch.set_num_threads(args.torch_num_threads)
@@ -663,6 +700,7 @@ def main():
     print("Thresholds:", thresholds, flush=True)
     print("n_jobs:", args.n_jobs, flush=True)
     print("torch_num_threads:", args.torch_num_threads, flush=True)
+    print("show_tqdm:", bool(args.show_tqdm), flush=True)
 
     # ------------------------------------------------------------
     # Load data once in parent
@@ -690,6 +728,7 @@ def main():
             save_root=args.save_root,
             seed=args.seed,
             worker_id=i,
+            show_tqdm=bool(args.show_tqdm),
         )
         for i, tau in enumerate(thresholds)
     )
@@ -721,3 +760,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# python text8_threshold_sweep.py \
+#   --thresholds 0,1e-3,1e-1 \
+#   --n_jobs 3 \
+#   --torch_num_threads 1 \
+#   --show_tqdm 0
