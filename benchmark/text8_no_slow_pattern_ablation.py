@@ -11,13 +11,14 @@ from tqdm import tqdm
 import pandas as pd
 import pickle
 import copy
-from joblib import Parallel, delayed
+
 
 # ============================================================
 # Device
 # ============================================================
-device = "cpu"   # parallel only recommended on CPU
+device = "cpu"
 print("Using device:", device)
+
 
 # ============================================================
 # text8 download / encoding
@@ -25,12 +26,14 @@ print("Using device:", device)
 def download_text8(path="dataset/text8.zip"):
     url = "http://mattmahoney.net/dc/text8.zip"
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
     if not os.path.exists(path):
         print("Downloading text8...", flush=True)
         urllib.request.urlretrieve(url, path)
 
     with zipfile.ZipFile(path) as zf:
         data = zf.read(zf.namelist()[0]).decode("utf-8")
+
     return data
 
 
@@ -60,6 +63,7 @@ class SequenceDataset(Dataset):
     def __getitem__(self, index):
         x = self.encoded_text[index:index + self.short_term_memory]
         y = self.encoded_text[index + self.short_term_memory]
+
         return (
             torch.tensor(x, dtype=torch.long),
             torch.tensor(y, dtype=torch.long),
@@ -69,24 +73,42 @@ class SequenceDataset(Dataset):
 # ============================================================
 # Model
 # ============================================================
-def build_model(device, use_sleep=False):
+def build_model(device):
+    """
+    No slow pattern-block update ablation.
+
+    Original:
+        lr_slowdown_factor = 0.25
+
+    Ablation:
+        lr_slowdown_factor = 1.0
+
+    This makes all prediction heads use the same learning rate.
+    """
     model = Model(
         total_layers=5,
         head_type="film",
+        memory_type="multihead",
         num_layers_prediction_head=2,
+
         vocab_size=27,
         hidden_sizes=[128, 128, 128, 128, 128],
         embedding_dim=30,
+
         lr_layers=1e-4,
-        lr_slowdown_factor=0.1,
+        lr_slowdown_factor=1.0,   # <-- no slowdown ablation
+
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
+
         short_term_memory=4,
         context_tag_buffer_size=20,
         recon_threshold=1e-2,
-        bad_init=not use_sleep,
+
+        bad_init=True,
         device=device,
     )
+
     return model
 
 
@@ -139,20 +161,20 @@ def make_eval_datasets(encoded, train_tokens, samples_seen, eval_tokens, short_t
     """
     Creates three evaluation splits.
 
-    backward: earliest eval_tokens from the stream.
+    backward: earliest eval_tokens from the training stream.
     current: most recent eval_tokens observed by the model.
     forward: held-out eval_tokens after the training stream.
     """
 
-    # Earliest 100k tokens
+    # earliest 100k tokens
     backward_encoded = encoded[:eval_tokens]
 
-    # Most recent 100k tokens seen so far
+    # most recent 100k tokens seen so far
     current_end = min(samples_seen, train_tokens)
     current_start = max(0, current_end - eval_tokens)
     current_encoded = encoded[current_start:current_end]
 
-    # Held-out future 100k tokens
+    # held-out future 100k tokens
     forward_start = train_tokens
     forward_end = train_tokens + eval_tokens
     forward_encoded = encoded[forward_start:forward_end]
@@ -179,26 +201,31 @@ def make_eval_datasets(encoded, train_tokens, samples_seen, eval_tokens, short_t
 # Settings
 # ============================================================
 short_term_memory = 4
+
 train_tokens = 99_000_000
 
-# Evaluate 100k tokens for each split.
-# Each split gives 100000 - short_term_memory = 99996 next-token predictions.
+# Evaluate 100k tokens for each split:
+# backward = earliest 100k
+# current = most recent 100k
+# forward = held-out 100k after train_tokens
 eval_tokens = 100_000
 
 eval_every = 100_000
 sleep_every = 20_000
 sleep_total_steps = 1025
 
-save_path = "../pickle_files/text8_sleep_ablation_5M_eval_every_100k_threeway.pickle"
-partial_dir = "../pickle_files/text8_sleep_ablation_partial_threeway"
-model_dir = "../saved_models/text8_sleep_ablation_parallel_threeway"
+condition_name = "no_slow_heads"
+
+save_path = "../pickle_files/text8_no_slow_heads_only.pkl"
+partial_dir = "../pickle_files/text8_no_slow_heads_only_partial"
+model_dir = "../saved_models/text8_no_slow_heads_only"
 
 os.makedirs(partial_dir, exist_ok=True)
 os.makedirs(model_dir, exist_ok=True)
 
 
 # ============================================================
-# Data loaded once in parent; each worker gets serialized copy
+# Load data
 # ============================================================
 text = download_text8()
 stoi, itos = build_vocab(text)
@@ -207,9 +234,15 @@ encoded = encode(text, stoi)
 train_encoded = encoded[:train_tokens]
 
 
-def run_condition(use_sleep, worker_id):
-    mode = "sleep" if use_sleep else "no_sleep"
-    print(f"\n==================== Running mode: {mode} ====================", flush=True)
+# ============================================================
+# Train no-slowdown condition only
+# ============================================================
+def run_no_slow_heads():
+    print(
+        "\n==================== Running condition: no_slow_heads "
+        "(lr_slowdown_factor=1.0) ====================",
+        flush=True,
+    )
 
     train_dataset = SequenceDataset(
         train_encoded,
@@ -224,7 +257,7 @@ def run_condition(use_sleep, worker_id):
         pin_memory=False,
     )
 
-    model = build_model(device, use_sleep=use_sleep)
+    model = build_model(device)
     model.summary()
     model.reset_model()
     model.train()
@@ -236,15 +269,14 @@ def run_condition(use_sleep, worker_id):
     correct_ring = np.zeros(1000, dtype=np.float32)
     bpc_ring = np.zeros(1000, dtype=np.float32)
 
-    partial_path = os.path.join(partial_dir, f"{mode}_partial.pkl")
-    partial_csv_path = os.path.join(partial_dir, f"{mode}_partial.csv")
-    latest_model_path = os.path.join(model_dir, f"{mode}_latest.pt")
-    final_model_path = os.path.join(model_dir, f"{mode}_5M_text8.pt")
+    partial_path = os.path.join(partial_dir, "no_slow_heads_partial.pkl")
+    partial_csv_path = os.path.join(partial_dir, "no_slow_heads_partial.csv")
+    latest_model_path = os.path.join(model_dir, "no_slow_heads_latest.pt")
+    final_model_path = os.path.join(model_dir, "no_slow_heads_text8.pt")
 
     pbar = tqdm(
         train_loader,
-        desc=f"Training ({mode})",
-        position=worker_id,
+        desc="Training (no_slow_heads)",
         leave=True,
     )
 
@@ -257,11 +289,14 @@ def run_condition(use_sleep, worker_id):
         with torch.no_grad():
             ii += 1
             ring_idx = ii % 1000
+
             bpc_ring[ring_idx] = float(compute_bpc(logits, y))
             pred_tok = logits.argmax(dim=-1)
             correct_ring[ring_idx] = float((pred_tok[0] == y[0]).item())
 
-        if use_sleep and ii % sleep_every == 0:
+        # Keep sleep ON.
+        # This isolates only the effect of removing slow pattern-head updates.
+        if ii % sleep_every == 0:
             model.sleep_step(total_steps=sleep_total_steps)
 
         if ii % eval_every == 0:
@@ -295,8 +330,8 @@ def run_condition(use_sleep, worker_id):
             )
 
             row = {
-                "condition": mode,
-                "sleep": int(use_sleep),
+                "condition": condition_name,
+                "lr_slowdown_factor": 1.0,
                 "samples seen": ii,
 
                 # Three-way evaluation
@@ -312,7 +347,7 @@ def run_condition(use_sleep, worker_id):
                 "backward_acc": backward_acc,
                 "backward_eval_count": backward_count,
 
-                # Backward-compatible aliases
+                # Backward-compatible aliases, if old plotting code expects eval_bpc/eval_acc
                 "eval_bpc": forward_bpc,
                 "eval_acc": forward_acc,
 
@@ -335,12 +370,13 @@ def run_condition(use_sleep, worker_id):
                 .reset_index(drop=True)
             )
 
+            # Save intermediate result every eval point
             df_partial.to_pickle(partial_path)
             df_partial.to_csv(partial_csv_path, index=False)
             torch.save(model.state_dict(), latest_model_path)
 
             print(
-                f"[{mode}] step={ii:,} | "
+                f"[no_slow_heads] step={ii:,} | "
                 f"train loss={float(loss):.6e} | "
                 f"recon loss={float(recon_loss):.6e} | "
                 f"train acc={row['train_acc_window']:.4f} | "
@@ -351,6 +387,7 @@ def run_condition(use_sleep, worker_id):
                 flush=True,
             )
 
+    # Final evaluation if not exactly divisible by eval_every
     if ii % eval_every != 0:
         backward_dataset, current_dataset, forward_dataset = make_eval_datasets(
             encoded=encoded,
@@ -382,8 +419,8 @@ def run_condition(use_sleep, worker_id):
         )
 
         row = {
-            "condition": mode,
-            "sleep": int(use_sleep),
+            "condition": condition_name,
+            "lr_slowdown_factor": 1.0,
             "samples seen": ii,
 
             "forward_bpc": forward_bpc,
@@ -421,28 +458,15 @@ def run_condition(use_sleep, worker_id):
         df_partial.to_pickle(partial_path)
         df_partial.to_csv(partial_csv_path, index=False)
 
-    torch.save(model.state_dict(), final_model_path)
-
-    return results
-
-
-if __name__ == "__main__":
-    # Change this list depending on what you want to run.
-    # [False] = no_sleep only
-    # [True] = sleep only
-    # [True, False] = both sleep and no_sleep in parallel
-    conditions_to_run = [False]
-
-    all_results = Parallel(n_jobs=-2, backend="loky", verbose=10)(
-        delayed(run_condition)(use_sleep, worker_id=i)
-        for i, use_sleep in enumerate(conditions_to_run)
+    # Save final model and final dataframe
+    torch.save(
+        model.state_dict(),
+        final_model_path,
     )
 
-    flat_results = [row for worker_rows in all_results for row in worker_rows]
-
     df = (
-        pd.DataFrame(flat_results)
-        .sort_values(["condition", "samples seen"])
+        pd.DataFrame(results)
+        .sort_values("samples seen")
         .reset_index(drop=True)
     )
 
@@ -451,9 +475,19 @@ if __name__ == "__main__":
     with open(save_path, "wb") as f:
         pickle.dump(df, f)
 
-    df.to_csv(save_path.replace(".pickle", ".csv"), index=False)
+    df.to_csv(save_path.replace(".pkl", ".csv"), index=False)
 
-    print("\nSaved results to:", save_path, flush=True)
-    print("Saved CSV to:", save_path.replace(".pickle", ".csv"), flush=True)
+    print("\nSaved partial results to:", partial_path, flush=True)
+    print("Saved partial CSV to:", partial_csv_path, flush=True)
+    print("Saved final results to:", save_path, flush=True)
+    print("Saved final CSV to:", save_path.replace(".pkl", ".csv"), flush=True)
+    print("Saved final model to:", final_model_path, flush=True)
     print(df.head(), flush=True)
     print(df.tail(), flush=True)
+
+
+# ============================================================
+# Main
+# ============================================================
+if __name__ == "__main__":
+    run_no_slow_heads()
