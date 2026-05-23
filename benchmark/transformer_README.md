@@ -4,8 +4,9 @@ Pre-LN LLaMA-style transformer (RMSNorm, RoPE, SwiGLU) for char-level benchmarks
 
 - **10M-char segments:** `train_text8_transformer.py` — nine runs per config (`--model_no` 1–9), 10M characters each.
 - **100M regime (90M chars per run):** `train_text8_transformer_100M.py` — same four model sizes; checkpoints are written as `..._text8_100M.pt`. Text8 is ~100M characters total, so use `--model_no 1` only (one long run per config, not nine folds).
-- **Sharp hierarchical model (100M regime):** `train_text8_100M.py` — trains `sharp.model.Model` on 90M characters; writes `../saved_models/model{m}_text8_100M.pt`. No CLI: set `device` and `model_no` in the script before running.
+- **Sharp hierarchical model (100M regime):** `train_text8_100M.py` — trains `sharp.model.Model` on 90M characters. CLI: `--device`, `--model_no`, and optional `--run_tag` (parallel runs: distinct tags → distinct checkpoints `../saved_models/model{m}_text8_100M.pt` or `..._100M_{tag}.pt`).
 - **text8 eval (100M regime):** `text8_eval_transformer_100M.py` — loads `..._text8_100M.pt`, uses 90M-char segments (`train_sample = 90_000_000`), default `--total_models 1`; writes `../pickle_files/text8_transformer_{size}_res_100M.pickle`.
+- **Sharp hierarchical eval (100M regime):** `text8_eval_100M.py` — loads `../saved_models/model{m}_text8_100M{_tag}.pt`, mirrors the train architecture (`hidden_sizes=[512]*5`), default `--total_models 1`; writes `../pickle_files/text8_sharp_res_100M{_tag}.pickle`. Pass the same `--run_tag` you used at training time.
 - **RNN baselines (100M regime):** `train_text8_baselines_100M.py` — use `--cell_type rnn|lstm|gru` for one baseline per process (and `--device cuda:N` per GPU), or `--cell_type all` to run RNN → LSTM → GRU on one device. Checkpoints: `../saved_models/baselines/{rnn,lstm,gru}_model{m}_text8_100M.pt`.
 - **text8 RNN baseline eval (100M regime):** `text8_eval_baselines_100M.py` — `--model_type rnn|lstm|gru` for each checkpoint; loads `..._text8_100M.pt`, uses 90M-char segments; default `--total_models 1`; writes `../pickle_files/text8_{rnn|lstm|gru}_res_100M.pickle`.
 
@@ -89,13 +90,51 @@ python -u train_text8_transformer_100M.py --model_size 5M_ctx20   --model_no 1 -
 
 ## Sharp hierarchical model — text8 100M (`train_text8_100M.py`)
 
-Trains the Sharp hierarchical `Model` on text8 (90M training characters for `model_no = 1` in the script). Checkpoint: `../saved_models/model{m}_text8_100M.pt`. Set `device` (and `model_no` if needed) at the top of `train_text8_100M.py` before launching; default in-repo is often `cpu`.
+Trains the Sharp hierarchical `Model` on text8 (90M characters for `--model_no 1`). Checkpoint: `../saved_models/model{m}_text8_100M.pt` by default, or `../saved_models/model{m}_text8_100M_{run_tag}.pt` if `--run_tag` is set (use this so parallel jobs do not overwrite the same file). Logs are separate when you `tee` to different files.
 
 ```bash
 mkdir -p logs/text8_sharp_100M
 
-python -u train_text8_100M.py 2>&1 | tee logs/text8_sharp_100M/train_m1.log
+python -u train_text8_100M.py --device cuda:0 2>&1 | tee logs/text8_sharp_100M/train_m1.log
 ```
+
+Two concurrent runs (e.g. original job on GPU 0, new job on GPU 1) with isolated checkpoints and logs:
+
+```bash
+mkdir -p logs/text8_sharp_100M
+
+python -u train_text8_100M.py --device cuda:0 --run_tag hang  2>&1 | tee logs/text8_sharp_100M/train_m1_hang.log &
+python -u train_text8_100M.py --device cuda:1 --run_tag fresh 2>&1 | tee logs/text8_sharp_100M/train_m1_fresh.log &
+```
+
+## Sharp hierarchical eval — text8 100M (`text8_eval_100M.py`)
+
+Evaluates checkpoints from `train_text8_100M.py`. Pass the same `--run_tag` used at training time so the script loads the matching `../saved_models/model{m}_text8_100M{_tag}.pt`. Default `--total_models 1` matches `--model_no 1` training. Output: `../pickle_files/text8_sharp_res_100M{_tag}.pickle`.
+
+**One variant per process:**
+
+```bash
+mkdir -p logs/text8_sharp_eval_100M
+
+# fresh variant
+python -u text8_eval_100M.py --run_tag fresh --device cuda:0 \
+  2>&1 | tee logs/text8_sharp_eval_100M/eval_m1_fresh.log
+
+# hang variant
+python -u text8_eval_100M.py --run_tag hang --device cuda:1 \
+  2>&1 | tee logs/text8_sharp_eval_100M/eval_m1_hang.log
+```
+
+**Both variants in parallel (background each line; adjust GPU ids):**
+
+```bash
+mkdir -p logs/text8_sharp_eval_100M
+
+python -u text8_eval_100M.py --run_tag fresh --device cuda:0 2>&1 | tee logs/text8_sharp_eval_100M/eval_m1_fresh.log &
+python -u text8_eval_100M.py --run_tag hang  --device cuda:1 2>&1 | tee logs/text8_sharp_eval_100M/eval_m1_hang.log  &
+```
+
+Optional: `--model_dir` (default `../saved_models`), `--pickle_dir` (default `../pickle_files`), `--total_models` if you trained multiple segments. Omit `--run_tag` if the checkpoint was saved without one (`model{m}_text8_100M.pt`).
 
 ## text8 RNN baselines — 100M regime (`train_text8_baselines_100M.py`)
 

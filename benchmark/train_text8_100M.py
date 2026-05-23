@@ -2,6 +2,7 @@
 from sharp.utils import DatasetConverter, compute_bpc, evaluate_model
 from sharp.model.model import Model
 
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,9 +18,46 @@ from tqdm import tqdm
 import pickle
 import math
 #%%
-device = "cpu" #torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+parser = argparse.ArgumentParser(
+    description="Train SHARP Model on text8 100M regime (90M-char segment)."
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default="cpu",
+    help='Torch device (e.g. "cuda:0", "cpu").',
+)
+parser.add_argument(
+    "--model_no",
+    type=int,
+    default=1,
+    help="Segment index (1-based); text8 uses 1 for the single 90M training chunk.",
+)
+parser.add_argument(
+    "--run_tag",
+    type=str,
+    default="",
+    help="Optional label for this process. Checkpoint is "
+         "model{model_no}_text8_100M_{tag}.pt (omit tag for default filename). "
+         "Use distinct tags for parallel runs so checkpoints do not overwrite.",
+)
+args = parser.parse_args()
+
+device = args.device
+model_no = args.model_no
+run_tag = args.run_tag.strip()
+if any(c in run_tag for c in ("/", "\\", "..")):
+    raise ValueError("--run_tag must not contain path characters")
+_ckpt_infix = f"_{run_tag}" if run_tag else ""
+checkpoint_path = os.path.join(
+    "..", "saved_models", f"model{model_no}_text8_100M{_ckpt_infix}.pt"
+)
 
 print("Using device:", device)
+print("model_no:", model_no)
+if run_tag:
+    print("run_tag:", run_tag)
+print("Checkpoint will be saved to:", checkpoint_path)
 
 #%%
 # Step 1: Download and extract text8
@@ -68,7 +106,6 @@ class Dataset_converter(Dataset):
         return self.X.shape[0]
 
 #%%
-model_no = 1
 # ---- Parameters ----
 total_layers, head_layers, short_term_memory = 5, 2, 4
 
@@ -131,8 +168,11 @@ h_ = None
 correct_ring = np.zeros(1000)
 bpc_train = np.zeros(1000)
 
+_tqd = f"m{model_no}"
+if run_tag:
+    _tqd += f"_{run_tag}"
 for _ in range(1):
-    for x, y in tqdm(loader):
+    for x, y in tqdm(loader, desc=_tqd):
         #loss, _, _, _, _ = model.layers[0].train_step(x,y)
         logits, loss, recon_loss, h_ = model.wake_step(x, y, h_)
 
@@ -160,11 +200,9 @@ for _ in range(1):
 # summary = (res_acc, res_bpc)
 # with open('/Users/jd/sleep_experiment/pickle_files/result_text8.pickle', 'wb') as handle:
 #     pickle.dump(summary, handle, protocol=pickle.HIGHEST_PROTOCOL)
-os.makedirs("../saved_models/", exist_ok=True)
-torch.save(
-    model.state_dict(),
-    f"../saved_models/model{model_no}_text8_100M.pt"
-)
+os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+torch.save(model.state_dict(), checkpoint_path)
+print("Saved checkpoint:", checkpoint_path)
 #%%
 # model = Model(    
 #         total_layers = total_layers,
