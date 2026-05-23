@@ -88,7 +88,7 @@ def build_model(device):
         embedding_dim=30,
 
         lr_layers=1e-4,
-        lr_slowdown_factor=0.25,
+        lr_slowdown_factor=0.1,
 
         optimizer_class=torch.optim.Adam,
         optimizer_kwargs={"weight_decay": 1e-12},
@@ -176,7 +176,6 @@ def wake_step_all_trainable_no_sleep(self, x, y, h_=None, return_context=False):
     # 1. Layer-0 memory reconstruction update
     # ============================================================
     recon_logit, h0, h_ = self.memories[0](x, h_)
-
     B, T, V = recon_logit.shape
 
     recon_loss0 = F.cross_entropy(
@@ -340,7 +339,47 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 
     del eval_model
 
-    return avg_bpc, avg_acc
+    return avg_bpc, avg_acc, total_count
+
+
+def make_eval_datasets(encoded, train_tokens, samples_seen, eval_tokens, short_term_memory):
+    """
+    Creates three evaluation splits.
+
+    backward: earliest eval_tokens from the stream.
+    current: most recent eval_tokens observed by the model.
+    forward: held-out eval_tokens after the training stream.
+    """
+
+    # Earliest 100k tokens
+    backward_encoded = encoded[:eval_tokens]
+
+    # Most recent 100k tokens seen so far
+    current_end = min(samples_seen, train_tokens)
+    current_start = max(0, current_end - eval_tokens)
+    current_encoded = encoded[current_start:current_end]
+
+    # Held-out future 100k tokens
+    forward_start = train_tokens
+    forward_end = train_tokens + eval_tokens
+    forward_encoded = encoded[forward_start:forward_end]
+
+    backward_dataset = SequenceDataset(
+        backward_encoded,
+        short_term_memory=short_term_memory,
+    )
+
+    current_dataset = SequenceDataset(
+        current_encoded,
+        short_term_memory=short_term_memory,
+    )
+
+    forward_dataset = SequenceDataset(
+        forward_encoded,
+        short_term_memory=short_term_memory,
+    )
+
+    return backward_dataset, current_dataset, forward_dataset
 
 
 # ============================================================
@@ -349,7 +388,10 @@ def evaluate_checkpoint(train_model, eval_dataset, device, max_eval_tokens=None)
 short_term_memory = 4
 
 train_tokens = 99_000_000
-eval_tokens = 300_000
+
+# Evaluate 100k tokens for each split.
+# Each split gives 100000 - short_term_memory = 99996 next-token predictions.
+eval_tokens = 100_000
 
 eval_every = 100_000
 
@@ -371,7 +413,6 @@ stoi, itos = build_vocab(text)
 encoded = encode(text, stoi)
 
 train_encoded = encoded[:train_tokens]
-eval_encoded = encoded[90_000_000:90_000_000 + eval_tokens]
 
 
 # ============================================================
@@ -386,11 +427,6 @@ def run_experiment():
 
     train_dataset = SequenceDataset(
         train_encoded,
-        short_term_memory=short_term_memory,
-    )
-
-    eval_dataset = SequenceDataset(
-        eval_encoded,
         short_term_memory=short_term_memory,
     )
 
@@ -452,9 +488,31 @@ def run_experiment():
         # No model.sleep_step(...) call exists in this script.
 
         if ii % eval_every == 0:
-            eval_bpc, eval_acc = evaluate_checkpoint(
+            backward_dataset, current_dataset, forward_dataset = make_eval_datasets(
+                encoded=encoded,
+                train_tokens=train_tokens,
+                samples_seen=ii,
+                eval_tokens=eval_tokens,
+                short_term_memory=short_term_memory,
+            )
+
+            backward_bpc, backward_acc, backward_count = evaluate_checkpoint(
                 train_model=model,
-                eval_dataset=eval_dataset,
+                eval_dataset=backward_dataset,
+                device=device,
+                max_eval_tokens=None,
+            )
+
+            current_bpc, current_acc, current_count = evaluate_checkpoint(
+                train_model=model,
+                eval_dataset=current_dataset,
+                device=device,
+                max_eval_tokens=None,
+            )
+
+            forward_bpc, forward_acc, forward_count = evaluate_checkpoint(
+                train_model=model,
+                eval_dataset=forward_dataset,
                 device=device,
                 max_eval_tokens=None,
             )
@@ -464,17 +522,42 @@ def run_experiment():
                 "sleep": 0,
                 "all_trainable_wake": 1,
                 "samples seen": ii,
-                "eval_bpc": eval_bpc,
-                "eval_acc": eval_acc,
+
+                # Three-way evaluation
+                "forward_bpc": forward_bpc,
+                "forward_acc": forward_acc,
+                "forward_eval_count": forward_count,
+
+                "current_bpc": current_bpc,
+                "current_acc": current_acc,
+                "current_eval_count": current_count,
+
+                "backward_bpc": backward_bpc,
+                "backward_acc": backward_acc,
+                "backward_eval_count": backward_count,
+
+                # Backward-compatible aliases
+                "eval_bpc": forward_bpc,
+                "eval_acc": forward_acc,
+
+                # Training diagnostics
                 "train_loss": float(loss),
                 "recon_loss": float(recon_loss),
                 "train_acc_window": float(np.mean(correct_ring)),
                 "train_bpc_window": float(np.mean(bpc_ring)),
+
+                # Eval metadata
+                "eval_tokens": eval_tokens,
+                "short_term_memory": short_term_memory,
             }
 
             results.append(row)
 
-            df_partial = pd.DataFrame(results)
+            df_partial = (
+                pd.DataFrame(results)
+                .sort_values("samples seen")
+                .reset_index(drop=True)
+            )
 
             # Save intermediate results
             df_partial.to_pickle(partial_path)
@@ -489,16 +572,39 @@ def run_experiment():
                 f"recon loss={float(recon_loss):.6e} | "
                 f"train acc={row['train_acc_window']:.4f} | "
                 f"train bpc={row['train_bpc_window']:.4f} | "
-                f"eval acc={eval_acc:.4f} | "
-                f"eval bpc={eval_bpc:.4f}",
+                f"forward bpc={forward_bpc:.4f} | "
+                f"current bpc={current_bpc:.4f} | "
+                f"backward bpc={backward_bpc:.4f}",
                 flush=True,
             )
 
     # Final evaluation if not exactly divisible by eval_every
     if ii % eval_every != 0:
-        eval_bpc, eval_acc = evaluate_checkpoint(
+        backward_dataset, current_dataset, forward_dataset = make_eval_datasets(
+            encoded=encoded,
+            train_tokens=train_tokens,
+            samples_seen=ii,
+            eval_tokens=eval_tokens,
+            short_term_memory=short_term_memory,
+        )
+
+        backward_bpc, backward_acc, backward_count = evaluate_checkpoint(
             train_model=model,
-            eval_dataset=eval_dataset,
+            eval_dataset=backward_dataset,
+            device=device,
+            max_eval_tokens=None,
+        )
+
+        current_bpc, current_acc, current_count = evaluate_checkpoint(
+            train_model=model,
+            eval_dataset=current_dataset,
+            device=device,
+            max_eval_tokens=None,
+        )
+
+        forward_bpc, forward_acc, forward_count = evaluate_checkpoint(
+            train_model=model,
+            eval_dataset=forward_dataset,
             device=device,
             max_eval_tokens=None,
         )
@@ -508,15 +614,41 @@ def run_experiment():
             "sleep": 0,
             "all_trainable_wake": 1,
             "samples seen": ii,
-            "eval_bpc": eval_bpc,
-            "eval_acc": eval_acc,
+
+            "forward_bpc": forward_bpc,
+            "forward_acc": forward_acc,
+            "forward_eval_count": forward_count,
+
+            "current_bpc": current_bpc,
+            "current_acc": current_acc,
+            "current_eval_count": current_count,
+
+            "backward_bpc": backward_bpc,
+            "backward_acc": backward_acc,
+            "backward_eval_count": backward_count,
+
+            "eval_bpc": forward_bpc,
+            "eval_acc": forward_acc,
+
             "train_loss": float(loss),
             "recon_loss": float(recon_loss),
             "train_acc_window": float(np.mean(correct_ring)),
             "train_bpc_window": float(np.mean(bpc_ring)),
+
+            "eval_tokens": eval_tokens,
+            "short_term_memory": short_term_memory,
         }
 
         results.append(row)
+
+        df_partial = (
+            pd.DataFrame(results)
+            .sort_values("samples seen")
+            .reset_index(drop=True)
+        )
+
+        df_partial.to_pickle(partial_path)
+        df_partial.to_csv(partial_csv_path, index=False)
 
     df = (
         pd.DataFrame(results)
@@ -535,6 +667,7 @@ def run_experiment():
     print("\nSaved partial pickle to:", partial_path, flush=True)
     print("Saved partial CSV to:", partial_csv_path, flush=True)
     print("Saved final results to:", save_path, flush=True)
+    print("Saved final CSV to:", save_path.replace(".pkl", ".csv"), flush=True)
     print("Saved final model to:", final_model_path, flush=True)
     print(df.head(), flush=True)
     print(df.tail(), flush=True)
