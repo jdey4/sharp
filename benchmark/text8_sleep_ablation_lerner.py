@@ -431,7 +431,7 @@ if __name__ == "__main__":
     # [False] = no_sleep only
     # [True] = sleep only
     # [True, False] = both sleep and no_sleep in parallel
-    conditions_to_run = [False]
+    conditions_to_run = [False, True]
 
     all_results = Parallel(n_jobs=-2, backend="loky", verbose=10)(
         delayed(run_condition)(use_sleep, worker_id=i)
