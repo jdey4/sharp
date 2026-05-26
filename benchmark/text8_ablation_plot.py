@@ -51,9 +51,9 @@ for label, path in paths.items():
 # ==============================
 # Smoothing without x-axis shift
 # ==============================
-window = 20
+window = 30
 
-def smooth_curve_no_shift(df, key, window=20):
+def smooth_curve_no_shift(df, key, window=30):
     x = df["samples seen"].values
     y = df[key].values
 

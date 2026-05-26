@@ -156,10 +156,10 @@ for tau in thresholds:
 # ============================================================
 # Smoothing without shifting x-axis
 # ============================================================
-window = 20
+window = 30
 
 
-def smooth_curve_no_shift(x, y, window=20):
+def smooth_curve_no_shift(x, y, window=30):
     x = np.asarray(x)
     y = np.asarray(y, dtype=float)
 
@@ -190,7 +190,7 @@ panels = [
     ("backward_bpc", "Backward"),
 ]
 
-fig, axes = plt.subplots(1, 4, figsize=(22, 5), sharex=True)
+fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharex=True)
 
 palette = sns.color_palette("tab10", n_colors=len(thresholds))
 color_map = {tau: palette[i] for i, tau in enumerate(thresholds)}
@@ -233,7 +233,7 @@ axes[3].set_ylabel("")
 
 # Common BPC y-label for right three panels
 fig.text(
-    0.265, 0.58,
+    0.265, 0.6,
     "BPC",
     va="center",
     rotation="vertical",
