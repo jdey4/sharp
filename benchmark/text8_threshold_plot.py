@@ -211,7 +211,7 @@ for ax, (metric, title) in zip(axes, panels):
         ax.plot(
             x_s,
             y_s,
-            linewidth=2.5,
+            linewidth=3,
             color=color_map[tau],
             label=labels[tau],
         )
@@ -251,7 +251,7 @@ fig.legend(
     ncol=len(thresholds),
     frameon=False,
     bbox_to_anchor=(0.5, .1),
-    fontsize=20
+    fontsize=24
 )
 
 # One global x-axis label
