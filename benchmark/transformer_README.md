@@ -235,7 +235,65 @@ Optional: `--model_dir` (default `../saved_models/baselines`), `--pickle_dir` (d
 mkdir -p logs/pg19
 
 python -u train_pg19_transformer.py --model_size 10M       --device cuda:0 2>&1 | tee logs/pg19/10M.log &
-python -u train_pg19_transformer.py --model_size 5M         --device cuda:1 2>&1 | tee logs/pg19/5M.log &
+python -u train_pg19_transformer.py --model_size 5M         --device cuda:0 2>&1 | tee logs/pg19/5M.log &
 python -u train_pg19_transformer.py --model_size 10M_ctx20  --device cuda:2 2>&1 | tee logs/pg19/10M_ctx20.log &
 python -u train_pg19_transformer.py --model_size 5M_ctx20   --device cuda:3 2>&1 | tee logs/pg19/5M_ctx20.log &
 ```
+
+## PG-19 GPT-2 sub-word training + evaluation (`train_pg19_gpt2_embed_full_softmax_transformer.py`)
+
+Sub-word variant matching the recurrent reference `train_pg19_gpt2_embed_full_softmax_baselines.py`: GPT-2 tokenizer, frozen GPT-2 input embeddings (768-dim) projected to `d_model`, and a full softmax over the GPT-2 vocabulary (50,257). Transformer architecture, optimizer (Adam, lr=1e-4, wd=1e-12), and non-overlapping `max_seq_len`-window training are inherited from the previous transformer baselines. Training budget: 25M GPT-2 tokens; evaluation: forward (holdout) / backward (first 5 train) / current (last 5 train) with sliding window 4 and up to 100k tokens per book. Checkpoints: `../saved_models/pg19_models/model1_pg19_gpt2_transformer_{model_size}_fullsoftmax.pt`. Summaries: `../pickle_files/result_pg19_gpt2_transformer_{model_size}_fullsoftmax.pickle`. The script trains-or-loads (skips training if the checkpoint already exists) and then always runs evaluation.
+
+**One config per process (separate GPUs):**
+
+```bash
+mkdir -p logs/pg19_gpt2
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M       --device cuda:0 \
+  2>&1 | tee logs/pg19_gpt2/10M.log
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M         --device cuda:1 \
+  2>&1 | tee logs/pg19_gpt2/5M.log
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M_ctx20  --device cuda:2 \
+  2>&1 | tee logs/pg19_gpt2/10M_ctx20.log
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M_ctx20   --device cuda:3 \
+  2>&1 | tee logs/pg19_gpt2/5M_ctx20.log
+```
+
+**All four configs in parallel (background each line; adjust GPU ids):**
+
+```bash
+mkdir -p logs/pg19_gpt2
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M       --device cuda:0 2>&1 | tee logs/pg19_gpt2/10M.log       &
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M         --device cuda:1 2>&1 | tee logs/pg19_gpt2/5M.log         &
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M_ctx20  --device cuda:2 2>&1 | tee logs/pg19_gpt2/10M_ctx20.log  &
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M_ctx20   --device cuda:3 2>&1 | tee logs/pg19_gpt2/5M_ctx20.log   &
+```
+
+**Context length 256 variants (`10M_ctx256`, `5M_ctx256`):**
+
+Same architecture as the `10M` / `5M` configs (d_model=256, n_layers=12/6, n_heads=8, d_ff=704/736), but training context length is reduced from `1024` to `256` GPT-2 tokens (non-overlapping chunks). Trainable parameter counts are identical to their `ctx=1024` counterparts (~22.7M for `10M_ctx256`, ~18.0M for `5M_ctx256`). Checkpoints land at `../saved_models/pg19_models/model1_pg19_gpt2_transformer_{10M_ctx256,5M_ctx256}_fullsoftmax.pt`; summaries at `../pickle_files/result_pg19_gpt2_transformer_{10M_ctx256,5M_ctx256}_fullsoftmax.pickle`.
+
+```bash
+mkdir -p logs/pg19_gpt2
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M_ctx256 --device cuda:0 \
+  2>&1 | tee logs/pg19_gpt2/10M_ctx256.log
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M_ctx256  --device cuda:1 \
+  2>&1 | tee logs/pg19_gpt2/5M_ctx256.log
+```
+
+Both ctx256 variants in parallel (background each line; adjust GPU ids):
+
+```bash
+mkdir -p logs/pg19_gpt2
+
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 10M_ctx256 --device cuda:0 2>&1 | tee logs/pg19_gpt2/10M_ctx256.log &
+python -u train_pg19_gpt2_embed_full_softmax_transformer.py --model_size 5M_ctx256  --device cuda:1 2>&1 | tee logs/pg19_gpt2/5M_ctx256.log  &
+```
+
+To re-run evaluation only, leave the checkpoint in place — the script detects it and skips straight to forward/backward/current evaluation.

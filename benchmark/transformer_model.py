@@ -9,6 +9,8 @@ CONFIGS = {
     "5M": dict(d_model=256, n_layers=6, n_heads=8, d_ff=736, max_seq_len=1024, vocab_size=27),
     "10M_ctx20": dict(d_model=256, n_layers=12, n_heads=8, d_ff=704, max_seq_len=20, vocab_size=27),
     "5M_ctx20": dict(d_model=256, n_layers=6, n_heads=8, d_ff=736, max_seq_len=20, vocab_size=27),
+    "10M_ctx256": dict(d_model=256, n_layers=12, n_heads=8, d_ff=704, max_seq_len=256, vocab_size=27),
+    "5M_ctx256": dict(d_model=256, n_layers=6, n_heads=8, d_ff=736, max_seq_len=256, vocab_size=27),
 }
 
 
