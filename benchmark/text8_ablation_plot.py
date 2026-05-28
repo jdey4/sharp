@@ -100,13 +100,14 @@ for ax, (metric, title) in zip(axes, panels):
             label=label,
         )
 
-    ax.set_title(title, fontsize=20)
+    ax.set_title(title, fontsize=26)
     ax.set_xlabel("")
     ax.set_ylabel("")
 
     # 1 decimal point on y-axis
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
+    ax.tick_params(axis="both", which="major", labelsize=20)
     # Clean axes
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -123,6 +124,7 @@ fig.legend(
     ncol=4,
     frameon=False,
     bbox_to_anchor=(0.5, .1),
+    fontsize=20
 )
 
 # Common y-axis label
@@ -132,7 +134,7 @@ fig.text(
     "BPC",
     va="center",
     rotation="vertical",
-    fontsize=20,
+    fontsize=24,
 )
 
 # Common x-axis label

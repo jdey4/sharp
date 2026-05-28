@@ -184,7 +184,7 @@ def smooth_curve_no_shift(x, y, window=30):
 # Plot
 # ============================================================
 panels = [
-    ("memory_update_percent_window", "Wake Memory Update Rate (%)"),
+    ("memory_update_percent_window", "Wake Memory Update Rate"),
     ("forward_bpc", "Forward"),
     ("current_bpc", "Current"),
     ("backward_bpc", "Backward"),
@@ -216,15 +216,16 @@ for ax, (metric, title) in zip(axes, panels):
             label=labels[tau],
         )
 
-    ax.set_title(title, fontsize=20)
+    ax.set_title(title, fontsize=26)
     ax.set_xlabel("")
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    ax.tick_params(axis="both", which="major", labelsize=20)
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
 # First panel y-label
-axes[0].set_ylabel("Update Rate (%)", fontsize=20)
+axes[0].set_ylabel("Update Rate (%)", fontsize=24)
 
 # No repeated y-labels on BPC panels
 axes[1].set_ylabel("")
@@ -237,7 +238,7 @@ fig.text(
     "BPC",
     va="center",
     rotation="vertical",
-    fontsize=20,
+    fontsize=24,
 )
 
 # Shared legend
@@ -250,6 +251,7 @@ fig.legend(
     ncol=len(thresholds),
     frameon=False,
     bbox_to_anchor=(0.5, .1),
+    fontsize=20
 )
 
 # One global x-axis label
