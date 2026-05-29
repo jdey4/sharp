@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
-from matplotlib.ticker import FormatStrFormatter
+from matplotlib.ticker import FormatStrFormatter, ScalarFormatter
 
 sns.set_context("talk")
 
@@ -14,15 +14,15 @@ sns.set_context("talk")
 paths = {
     "Sleep": "../pickle_files/text8_sleep_ablation_partial_threeway/sleep_partial.pkl",
     "No Sleep": "../pickle_files/text8_sleep_ablation_partial_threeway/no_sleep_partial.pkl",
-    "No Pattern Slowdown": "../pickle_files/text8_no_slow_heads_only_partial/no_slow_heads_partial.pkl",
-    "Wake-only All-Trainable": "../pickle_files/text8_wake_only_all_trainable_partial/wake_only_all_trainable_partial.pkl",
+    "constant-learning rate\n pattern blocks": "../pickle_files/text8_no_slow_heads_only_partial/no_slow_heads_partial.pkl",
+    "Wake-only (All pattern &\n memory blocks trainable)": "../pickle_files/text8_wake_only_all_trainable_partial/wake_only_all_trainable_partial.pkl",
 }
 
 colors = {
     "Sleep": "r",
     "No Sleep": "b",
-    "No Pattern Slowdown": "g",
-    "Wake-only All-Trainable": "purple",
+    "constant-learning rate\n pattern blocks": "g",
+    "Wake-only (All pattern &\n memory blocks trainable)": "purple",
 }
 
 # ==============================
@@ -82,8 +82,22 @@ panels = [
     ("backward_bpc", "Backward"),
 ]
 
-fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharex=True)
+fontsize_title = 28
+fontsize_axis = 26
+fontsize_tick = 25
+fontsize_legend = 20
 
+# Wide figure with normal right-side legend space
+fig, axes = plt.subplots(
+    1,
+    3,
+    figsize=(20.0, 5.0),
+    sharex=True
+)
+
+# ==============================
+# Plot
+# ==============================
 for ax, (metric, title) in zip(axes, panels):
     for label, df in dfs.items():
         if metric not in df.columns:
@@ -95,52 +109,75 @@ for ax, (metric, title) in zip(axes, panels):
         ax.plot(
             x,
             y,
-            linewidth=2.5,
+            linewidth=3,
             color=colors[label],
             label=label,
         )
 
-    ax.set_title(title, fontsize=26)
+    ax.set_title(title, fontsize=fontsize_title, pad=8)
     ax.set_xlabel("")
     ax.set_ylabel("")
 
-    # 1 decimal point on y-axis
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
 
-    ax.tick_params(axis="both", which="major", labelsize=20)
-    # Clean axes
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=fontsize_tick
+    )
+
+    formatter = ScalarFormatter(useMathText=True)
+    formatter.set_powerlimits((0, 0))
+    ax.xaxis.set_major_formatter(formatter)
+
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
 # ==============================
-# Shared legend, x-label, y-label
+# Shared legend on the right
 # ==============================
 handles, legend_labels = axes[0].get_legend_handles_labels()
 
 fig.legend(
     handles,
     legend_labels,
-    loc="upper center",
-    ncol=4,
+    loc="center left",
+    bbox_to_anchor=(0.79, 0.53),
     frameon=False,
-    bbox_to_anchor=(0.5, .1),
-    fontsize=20
+    fontsize=fontsize_legend,
+    handlelength=2.0,
+    handletextpad=0.65,
+    labelspacing=0.65,
+    borderaxespad=0.0,
 )
 
-# Common y-axis label
+# ==============================
+# Shared labels
+# ==============================
 fig.text(
-    0.015,
-    0.6,
+    0.018,
+    0.55,
     "BPC",
     va="center",
+    ha="center",
     rotation="vertical",
-    fontsize=24,
+    fontsize=fontsize_axis,
 )
 
-# Common x-axis label
-fig.supxlabel("Samples Seen", fontsize=24, y=0.1)
+fig.supxlabel(
+    "Samples Seen",
+    fontsize=fontsize_axis,
+    y=0.0
+)
 
-plt.tight_layout(rect=[0.03, 0.04, 1, 1])
+# Leave right-side room for normal fig.legend
+plt.subplots_adjust(
+    left=0.065,
+    right=0.79,
+    top=0.86,
+    bottom=0.23,
+    wspace=0.30
+)
 
 # ==============================
 # Save
@@ -150,8 +187,8 @@ os.makedirs("../plots", exist_ok=True)
 pdf_path = "../plots/text8_ablation_forward_current_backward.pdf"
 png_path = "../plots/text8_ablation_forward_current_backward.png"
 
-plt.savefig(pdf_path, bbox_inches="tight")
-plt.savefig(png_path, dpi=300, bbox_inches="tight")
+fig.savefig(pdf_path, bbox_inches="tight")
+fig.savefig(png_path, dpi=300, bbox_inches="tight")
 
 plt.show()
 

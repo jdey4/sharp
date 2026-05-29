@@ -139,10 +139,10 @@ def threshold_label(tau):
     tau = float(tau)
 
     if tau == 0.0:
-        return r"$\mathrm{threshold}=0$"
+        return r"$\tau=0$"
 
     exponent = int(np.round(np.log10(tau)))
-    return rf"$\mathrm{{threshold}}=10^{{{exponent}}}$"
+    return rf"$\tau=10^{{{exponent}}}$"
 
 
 thresholds = sorted(df["threshold"].dropna().unique())
@@ -184,13 +184,18 @@ def smooth_curve_no_shift(x, y, window=30):
 # Plot
 # ============================================================
 panels = [
-    ("memory_update_percent_window", "Wake Memory Update Rate"),
+    ("memory_update_percent_window", "Wake Memory Update"),
     ("forward_bpc", "Forward"),
     ("current_bpc", "Current"),
     ("backward_bpc", "Backward"),
 ]
 
-fig, axes = plt.subplots(1, 4, figsize=(20, 5), sharex=True)
+fig, axes = plt.subplots(
+    1,
+    4,
+    figsize=(28, 5),
+    sharex=True
+)
 
 palette = sns.color_palette("tab10", n_colors=len(thresholds))
 color_map = {tau: palette[i] for i, tau in enumerate(thresholds)}
@@ -211,21 +216,22 @@ for ax, (metric, title) in zip(axes, panels):
         ax.plot(
             x_s,
             y_s,
-            linewidth=3,
+            linewidth=4,
             color=color_map[tau],
             label=labels[tau],
         )
 
-    ax.set_title(title, fontsize=26)
+    ax.set_title(title, fontsize=32)
+    ax.set_xticks([0, 5e7, 1e8])
     ax.set_xlabel("")
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-    ax.tick_params(axis="both", which="major", labelsize=20)
+    ax.tick_params(axis="both", which="major", labelsize=27)
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
 # First panel y-label
-axes[0].set_ylabel("Update Rate (%)", fontsize=24)
+axes[0].set_ylabel("Update Rate (%)", fontsize=30)
 
 # No repeated y-labels on BPC panels
 axes[1].set_ylabel("")
@@ -234,30 +240,52 @@ axes[3].set_ylabel("")
 
 # Common BPC y-label for right three panels
 fig.text(
-    0.265, 0.6,
+    0.22,
+    0.57,
     "BPC",
     va="center",
     rotation="vertical",
-    fontsize=24,
+    fontsize=30,
 )
 
-# Shared legend
+# ============================================================
+# Shared legend on the right
+# ============================================================
 handles, legend_labels = axes[0].get_legend_handles_labels()
 
-fig.legend(
+leg = fig.legend(
     handles,
     legend_labels,
-    loc="upper center",
-    ncol=len(thresholds),
+    title="Threshold",
+    loc="center left",
+    bbox_to_anchor=(0.845, 0.52),
     frameon=False,
-    bbox_to_anchor=(0.5, .1),
-    fontsize=24
+    fontsize=24,
+    title_fontsize=24,
+    handlelength=2.2,
+    handletextpad=0.7,
+    labelspacing=0.75,
+    borderaxespad=0.0,
 )
 
-# One global x-axis label
-fig.supxlabel("Samples Seen", fontsize=24, y=0.1)
+# Center title relative to legend box
+leg.get_title().set_ha("center")
+try:
+    leg._legend_box.align = "center"
+except Exception:
+    pass
 
-plt.tight_layout(rect=[0, 0.04, 1, 1])
+# One global x-axis label
+fig.supxlabel("Samples Seen", fontsize=30, y=0.0)
+
+# Leave room on the right for legend
+plt.subplots_adjust(
+    left=0.06,
+    right=0.82,
+    top=0.86,
+    bottom=0.22,
+    wspace=0.30
+)
 
 
 # ============================================================
@@ -266,8 +294,8 @@ plt.tight_layout(rect=[0, 0.04, 1, 1])
 pdf_path = os.path.join(plot_dir, "text8_threshold_sweep_four_panels.pdf")
 png_path = os.path.join(plot_dir, "text8_threshold_sweep_four_panels.png")
 
-plt.savefig(pdf_path, bbox_inches="tight")
-plt.savefig(png_path, dpi=300, bbox_inches="tight")
+fig.savefig(pdf_path, bbox_inches="tight")
+fig.savefig(png_path, dpi=300, bbox_inches="tight")
 
 plt.show()
 
